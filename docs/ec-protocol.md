@@ -20,7 +20,7 @@ at address 0x5B); the driver does not need them.
 
 ## Commands
 
-| Cmd | Meaning | Driver (with patches 0401-0409) | Notes on this laptop |
+| Cmd | Meaning | Driver (with patches 0401-0410) | Notes on this laptop |
 |---|---|---|---|
 | 0x05 | read pending event | read in the IRQ handler | |
 | 0x0E | firmware version, 4 bytes | read at probe | reports 3.1.1 |

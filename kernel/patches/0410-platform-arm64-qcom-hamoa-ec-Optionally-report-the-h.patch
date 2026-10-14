@@ -1,0 +1,76 @@
+From 82644b5aa441bebe9fa2f61aaf8c61e5bc5fec90 Mon Sep 17 00:00:00 2001
+From: Kacper Goc <11682528+BurninChrome@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 12:27:21 +0200
+Subject: [PATCH] platform: arm64: qcom-hamoa-ec: Optionally report the hottest
+ zone as SoC Tj
+
+Boards may want the EC to follow the hottest sensor instead of the
+average of the qcom,tsens zones. Add a tj_use_max module parameter
+(default off, keeps the average) so this can be tried without
+rebuilding, and allow three tsens providers in the binding so the ASUS
+Vivobook S 15 can list the sensors of all three CPU clusters
+(tsens0..2) instead of the CRD selection (tsens2 + the GPU/NSP/camera
+sensors of tsens3), which under CPU load reported a Tj well below the
+cores and kept the fans slow.
+
+Assisted-by: LLM (Claude Opus 5.5)
+---
+ .../bindings/embedded-controller/qcom,hamoa-crd-ec.yaml  | 2 +-
+ drivers/platform/arm64/qcom-hamoa-ec.c                   | 9 ++++++++-
+ 2 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/embedded-controller/qcom,hamoa-crd-ec.yaml b/Documentation/devicetree/bindings/embedded-controller/qcom,hamoa-crd-ec.yaml
+index 5e62556d7..4def98b49 100644
+--- a/Documentation/devicetree/bindings/embedded-controller/qcom,hamoa-crd-ec.yaml
++++ b/Documentation/devicetree/bindings/embedded-controller/qcom,hamoa-crd-ec.yaml
+@@ -47,7 +47,7 @@ properties:
+       applicable for Hamoa based devices.
+     $ref: /schemas/types.yaml#/definitions/phandle-array
+     minItems: 1
+-    maxItems: 2
++    maxItems: 3
+     items:
+       items:
+         - description: phandle to a tsens thermal-sensor provider
+diff --git a/drivers/platform/arm64/qcom-hamoa-ec.c b/drivers/platform/arm64/qcom-hamoa-ec.c
+index c4c8256b0..45bb51173 100644
+--- a/drivers/platform/arm64/qcom-hamoa-ec.c
++++ b/drivers/platform/arm64/qcom-hamoa-ec.c
+@@ -68,6 +68,10 @@ static int tj_offset_dk;
+ module_param(tj_offset_dk, int, 0644);
+ MODULE_PARM_DESC(tj_offset_dk, "Offset in 0.1 degree units added to the SoC Tj sent to the EC (2732 for an EC expecting 0.1 K)");
+ 
++static bool tj_use_max;
++module_param(tj_use_max, bool, 0644);
++MODULE_PARM_DESC(tj_use_max, "Report the hottest qcom,tsens zone as SoC Tj instead of the average");
++
+ static bool allow_suspend;
+ module_param(allow_suspend, bool, 0644);
+ MODULE_PARM_DESC(allow_suspend, "Allow system suspend on ECs that need a constant SoC Tj feed (only once MS enter is known to stop the EC Tj watchdog)");
+@@ -614,6 +618,7 @@ static int qcom_ec_setup_soc_tj_zones(struct qcom_ec *ec)
+ static int qcom_ec_send_soc_tj_temp(struct qcom_ec *ec)
+ {
+ 	int total = 0;
++	int max = INT_MIN;
+ 	int valid = 0;
+ 	int ret = 0;
+ 	u16 temp;
+@@ -626,12 +631,14 @@ static int qcom_ec_send_soc_tj_temp(struct qcom_ec *ec)
+ 			continue;
+ 
+ 		total += zone_temp;
++		max = max(max, zone_temp);
+ 		valid++;
+ 	}
+ 
+ 	if (valid) {
+ 		/* Convert millidegrees Celsius to 0.1 deg C units as required by EC */
+-		temp = clamp(total / valid / 100 + tj_offset_dk, 0, (int)U16_MAX);
++		temp = clamp((tj_use_max ? max : total / valid) / 100 + tj_offset_dk,
++			     0, (int)U16_MAX);
+ 	} else if (ec->tj_armed) {
+ 		/* Never let an armed EC starve: repeat the last value */
+ 		temp = ec->tj_last;
+-- 
+2.56.0
+

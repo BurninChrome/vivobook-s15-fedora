@@ -7,6 +7,17 @@ Releases are tagged `vYYYY.MM.N`. The kernel package is versioned separately
 
 ## [Unreleased]
 
+### Changed
+- Kernel: patches 0601-0604 revert the pm_clk conversion of the LPASS
+  WSA/RX/TX/VA macros, fixing the 7.3 SoundWire regression (no sound after
+  runtime resume). The udev workaround now applies only to kernels without
+  them.
+- EC (experimental): SoC Tj is averaged over all three CPU clusters
+  (33 tsens zones instead of 26); patch 0410 adds `tj_use_max` to report the
+  hottest zone instead. Under a 240 s all-core load the fans reach about
+  6000 RPM and the cores stay at 88-92 C.
+
+
 ### Added
 - Device tree overlay fragments: audio (WSA8845, WCD9385, DMIC), front camera
   (OV02C10), IR camera (HM1092 with IR LED); EC (`qcom-hamoa-ec`) as an

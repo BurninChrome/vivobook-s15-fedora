@@ -13,4 +13,9 @@
 0407-platform-arm64-qcom-hamoa-ec-Add-ASUS-Vivobook-S-15-.patch
 0408-platform-arm64-qcom-hamoa-ec-Never-starve-the-ASUS-E.patch
 0409-platform-arm64-qcom-hamoa-ec-Defer-probe-until-the-t.patch
+0410-platform-arm64-qcom-hamoa-ec-Optionally-report-the-h.patch
 0500-usb-typec-mux-ps883x-handle-DP-pin-F-and-wait-after-config-writes.patch
+0601-ASoC-codecs-lpass-wsa-macro-revert-PM-clock-framework-conversion.patch
+0602-ASoC-codecs-lpass-rx-macro-revert-PM-clock-framework-conversion.patch
+0603-ASoC-codecs-lpass-tx-macro-revert-PM-clock-framework-conversion.patch
+0604-ASoC-codecs-lpass-va-macro-revert-PM-clock-framework-conversion.patch

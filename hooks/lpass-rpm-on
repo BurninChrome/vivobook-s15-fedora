@@ -2,16 +2,31 @@
 # SPDX-License-Identifier: MIT
 #
 # Called from 90-vivobook-s15-lpass-rpm.rules: disable runtime PM of the
-# LPASS macros on kernels >= 7.3 (see the comment in the rule).
-# Does nothing on 7.2.x.
+# LPASS macros, but only when the running kernel's macro module uses pm_clk
+# (7.3 without patches 0601-0604). Does nothing on 7.2.x and on kernels with
+# the patches. When in doubt (module missing or unreadable) it applies the
+# workaround, which is the safe choice for audio.
 dev="$1"
 case "$dev" in
 	6aa0000.codec|6ac0000.codec|6ae0000.codec|6b00000.codec|6d44000.codec) ;;
 	*) exit 0 ;;
 esac
-kver=$(uname -r)
-first=$(printf '%s\n%s\n' "7.3" "${kver%%-*}" | sort -V | head -n 1)
-[ "$first" = "7.3" ] || exit 0
+
+uses_pm_clk() {
+	mod=$(/usr/sbin/modinfo -n snd_soc_lpass_wsa_macro 2>/dev/null) || return 0
+	[ -r "$mod" ] || return 0
+	case "$mod" in
+		*.xz)  dec="/usr/bin/xz -dc" ;;
+		*.zst) dec="/usr/bin/zstd -dcq" ;;
+		*)     dec="/usr/bin/cat" ;;
+	esac
+	[ -x "${dec%% *}" ] || return 0
+	[ -x /usr/bin/grep ] || return 0
+	$dec "$mod" 2>/dev/null | /usr/bin/grep -aq 'pm_clk_suspend'
+}
+
+# /etc/vivobook-s15-lpass-rpm-force forces the workaround on any kernel.
+[ -e /etc/vivobook-s15-lpass-rpm-force ] || uses_pm_clk || exit 0
 ctl="/sys/devices/platform/soc@0/$dev/power/control"
 [ -w "$ctl" ] && echo on > "$ctl"
 exit 0

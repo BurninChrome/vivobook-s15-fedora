@@ -9,13 +9,13 @@
  *  - GpioInt(Edge, ActiveLow, PullUp) on virtual ACPI pin 0x140, which is
  *    GIO0 _CRS interrupt #5 = GIC 0x2f8 = PDC 142 = TLMM GPIO 66
  *    (same pin and address as the Hamoa CRD / IOT EVK EC)
- *  - qcom,tsens: CPU cluster sensors averaged for SoC Tj, as on the CRD
+ *  - qcom,tsens: sensors of all three CPU clusters averaged for SoC Tj
  *
  * WARNING: with the driver bound the EC receives SoC Tj and from then on
  * hard resets the machine ~2 min after the reports stop.
  * The driver (patch 0408) never stops them.
  *
- * Needs kernel patches kernel/patches/0401-0409.
+ * Needs kernel patches kernel/patches/0401-0410.
  * Without them no driver matches "asus,vivobook-s15-ec" and the node is
  * inert. Deliberately no "qcom,hamoa-crd-ec" fallback: the CRD config
  * would calibrate the fans and overwrite the ASUS fan curve.
@@ -36,7 +36,12 @@
 		pinctrl-0 = <&ec_int_n_default>;
 		pinctrl-names = "default";
 
-		qcom,tsens = <&tsens2 11>, <&tsens3 15>;
+		/*
+		 * All three CPU clusters (sensors 0..10 of tsens0..2). The CRD
+		 * selection <&tsens2 11>, <&tsens3 15> covers only cluster 2 plus
+		 * GPU/NSP/camera and kept the reported Tj ~10 C below the cores.
+		 */
+		qcom,tsens = <&tsens0 11>, <&tsens1 11>, <&tsens2 11>;
 	};
 };
 

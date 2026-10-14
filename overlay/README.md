@@ -14,7 +14,7 @@ left in the `.dtbauto` section (206336 bytes on Fedora 45).
 | `10-audio.dtsi` | `sound` node, 2 x WSA8845 speakers, WCD9385 headset codec, DMIC pair | firmware |
 | `20-camera-rgb.dtsi` | CAMCC, CCI0/CCI1, CAMSS, OV02C10 at 0x36 on CSIPHY4, `rotation = <180>` | kernel with the CCI fix (0010) |
 | `30-camera-ir.dtsi` | HM1092 at 0x24 on CCI0/CSIPHY0, IR LED on the PM8550 flash | patches 0200-0202, fragment 20 |
-| `experimental/40-ec.dtsi` | `asus,vivobook-s15-ec` node with the `tsens` zones for Tj | patches 0401-0409; read docs/ec-fan-control.md |
+| `experimental/40-ec.dtsi` | `asus,vivobook-s15-ec` node with the `tsens` zones for Tj | patches 0401-0410; read docs/ec-fan-control.md |
 
 Fragments are written as overlay fragments (`&{/} { ... };` and label
 references), so the same text can later become a mainline DTS patch.
