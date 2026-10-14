@@ -9,10 +9,13 @@
 # NEVER printed: the report lists only category, file and number of hits.
 #
 # Usage:
-#   scan-private.sh [-a] [-o REPORT] [DIR]
+#   scan-private.sh [-a] [-o REPORT] [-x ALLOW] [DIR]
 #     DIR       tree to scan (default: current directory)
 #     -a        do not skip large trees (kernel sources, build dirs, RPMs, ext/)
 #     -o FILE   also write the report to FILE
+#     -x FILE   allow list: lines "CATEGORY PATH_GLOB" (relative to DIR, bash
+#               glob, '#' comments); matching hits are listed as allowed and
+#               do not count for the exit code
 #
 # Exit code: 0 no hits, 1 hits found, 2 usage error.
 
@@ -22,11 +25,13 @@ export LC_ALL
 
 ALL=0
 OUT=""
-while getopts "ao:h" opt; do
+ALLOW=""
+while getopts "ao:x:h" opt; do
     case $opt in
         a) ALL=1 ;;
         o) OUT=$OPTARG ;;
-        h) sed -n '4,18p' "$0"; exit 0 ;;
+        x) ALLOW=$OPTARG ;;
+        h) sed -n '4,21p' "$0"; exit 0 ;;
         *) exit 2 ;;
     esac
 done
@@ -209,7 +214,27 @@ while IFS= read -r -d '' f; do
 done < "$TMP/all.lst"
 
 # ---------------------------------------------------------------------------
-# 4. Report.
+# 4. Allow list.
+# ---------------------------------------------------------------------------
+: > "$TMP/allowed"
+if [ -n "$ALLOW" ]; then
+    [ -f "$ALLOW" ] || { echo "No allow list: $ALLOW" >&2; exit 2; }
+    : > "$TMP/kept"
+    while IFS= read -r line; do
+        read -r cat _ file _ <<< "$line"
+        allowed=0
+        while read -r acat aglob; do
+            case "$acat" in ''|'#'*) continue ;; esac
+            # shellcheck disable=SC2053
+            if [ "$acat" = "$cat" ] && [[ $file == $aglob ]]; then allowed=1; break; fi
+        done < "$ALLOW"
+        if [ $allowed -eq 1 ]; then echo "$line" >> "$TMP/allowed"; else echo "$line" >> "$TMP/kept"; fi
+    done < "$REPORT"
+    mv "$TMP/kept" "$REPORT"
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Report.
 # ---------------------------------------------------------------------------
 {
     echo "# scan-private.sh: $(date -Iseconds)"
@@ -227,6 +252,11 @@ done < "$TMP/all.lst"
     echo "#"
     echo "# summary:"
     awk '{c[$1]++} END {for (k in c) printf "#   %-12s %d files\n", k, c[k]}' "$REPORT" | sort
+    if [ -s "$TMP/allowed" ]; then
+        echo "#"
+        echo "# allowed by $ALLOW ($(wc -l < "$TMP/allowed") entries, not counted):"
+        sed 's/^/#   /' "$TMP/allowed"
+    fi
 } > "$TMP/final"
 
 if [ -n "$OUT" ]; then cp "$TMP/final" "$OUT"; fi

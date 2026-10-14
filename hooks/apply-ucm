@@ -6,7 +6,6 @@
 # To be removed once alsa-ucm-conf ships the profile.
 set -euo pipefail
 
-LIB="$(dirname "$(readlink -f "$0")")"
 DATA=${VIVOBOOK_S15_DATADIR:-@DATADIR@/vivobook-s15}
 UCM=/usr/share/alsa/ucm2/Qualcomm/x1e80100
 DISP="$UCM/x1e80100.conf"

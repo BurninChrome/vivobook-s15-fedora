@@ -8,8 +8,7 @@ LICENSES/:
   LICENSES/BSD-3-Clause.txt   device tree fragments
   LICENSES/BSD-2-Clause.txt   dual-licensed kernel headers in overlay/include/
   LICENSES/MIT.txt            scripts, hooks, packaging, documentation
-  (GPL-2.0.txt and the dual licenses cover the unmodified kernel headers
-  in overlay/include/)
+  LICENSES/GPL-2.0-or-later.txt  the hid-asus-ec driver added by one kernel patch
 
 Third-party files keep their original license and copyright notices.
 

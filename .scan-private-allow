@@ -1,0 +1,16 @@
+# Allow list for tools/scan-private.sh -x (used by CI).
+# CATEGORY PATH_GLOB. Only data that is published on purpose belongs here.
+
+# Authorship of third-party patches and kernel headers (attribution is required)
+email kernel/patches/*.patch
+email overlay/include/*
+# lore Message-ID of the HM1092 v5 series
+email docs/credits.md
+
+# The maintainer's public name (identity.conf), in patch authorship and packaging
+user identity.conf
+user kernel/patches/*.patch
+user packaging/copr/vivobook-s15-support.spec
+
+# Redaction code that mentions SSID/BSSID patterns
+wifi userspace/wifi/recover-wifi.sh

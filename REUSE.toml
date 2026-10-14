@@ -3,9 +3,16 @@
 # Files with their own SPDX header keep it; these annotations cover the rest.
 version = 1
 
+# Default copyright for files that carry only a license header. In
+# REUSE.toml the last matching annotation wins, so this one comes first.
+[[annotations]]
+path = ["**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "The vivobook-s15-fedora contributors"
+
 [[annotations]]
 path = [
-  "*.md", "docs/**", ".github/**", ".copr/**", ".gitignore", "identity.conf",
+  "*.md", "docs/**", ".github/**", ".copr/**", ".gitignore", "identity.conf", ".scan-private-allow",
   "packaging/**", "hooks/*.path", "hooks/*.service", "hooks/*.conf", "hooks/README.md",
   "kernel/README.md", "kernel/config/**", "kernel/patches/series", "overlay/README.md",
   "overlay/include/VERSION", "tools/README.md", "userspace/**/README.md",
@@ -22,11 +29,93 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "The vivobook-s15-fedora contributors and The x1e-vivobook-s15-linux-audio contributors"
 SPDX-License-Identifier = "MIT"
 
+# Kernel patches: the patched files keep the license stated in their own
+# SPDX lines (GPL-2.0-only, GPL-2.0-or-later, or GPL-2.0-only OR BSD-2-Clause
+# for the binding). "override" so REUSE does not parse the diff contents.
 [[annotations]]
 path = ["kernel/patches/*.patch"]
-precedence = "aggregate"
+precedence = "override"
 SPDX-FileCopyrightText = "See the From: and Signed-off-by: lines of each patch"
+SPDX-License-Identifier = "GPL-2.0-only AND GPL-2.0-or-later AND (GPL-2.0-only OR BSD-2-Clause)"
+
+# overlay/include/: unmodified kernel headers. Their SPDX lines use the
+# deprecated id "GPL-2.0", which means GPL-2.0-only; the same licenses are
+# stated here per file without deprecated ids, copyright stays in the files.
+
+[[annotations]]
+path = "overlay/include/dt-bindings/clock/qcom,x1e80100-camcc.h"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel authors"
+SPDX-License-Identifier = "GPL-2.0-only OR BSD-2-Clause"
+
+[[annotations]]
+path = "overlay/include/dt-bindings/clock/qcom,x1e80100-gcc.h"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel authors"
+SPDX-License-Identifier = "GPL-2.0-only OR BSD-2-Clause"
+
+[[annotations]]
+path = "overlay/include/dt-bindings/gpio/gpio.h"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel authors"
+SPDX-License-Identifier = "GPL-2.0-only OR BSD-2-Clause"
+
+[[annotations]]
+path = "overlay/include/dt-bindings/interconnect/qcom,icc.h"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel authors"
 SPDX-License-Identifier = "GPL-2.0-only"
 
-# overlay/include/ holds unmodified headers from the kernel tree; they keep
-# their own SPDX headers.
+[[annotations]]
+path = "overlay/include/dt-bindings/interconnect/qcom,x1e80100-rpmh.h"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel authors"
+SPDX-License-Identifier = "GPL-2.0-only OR BSD-2-Clause"
+
+[[annotations]]
+path = "overlay/include/dt-bindings/interrupt-controller/arm-gic.h"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel authors"
+SPDX-License-Identifier = "GPL-2.0-only OR MIT"
+
+[[annotations]]
+path = "overlay/include/dt-bindings/interrupt-controller/irq.h"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel authors"
+SPDX-License-Identifier = "GPL-2.0-only OR MIT"
+
+[[annotations]]
+path = "overlay/include/dt-bindings/leds/common.h"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel authors"
+SPDX-License-Identifier = "GPL-2.0-only OR BSD-2-Clause"
+
+[[annotations]]
+path = "overlay/include/dt-bindings/media/video-interfaces.h"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel authors"
+SPDX-License-Identifier = "GPL-2.0-only OR MIT"
+
+[[annotations]]
+path = "overlay/include/dt-bindings/power/qcom,rpmhpd.h"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel authors"
+SPDX-License-Identifier = "GPL-2.0-only OR BSD-2-Clause"
+
+[[annotations]]
+path = "overlay/include/dt-bindings/regulator/qcom,rpmh-regulator.h"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel authors"
+SPDX-License-Identifier = "GPL-2.0-only"
+
+[[annotations]]
+path = "overlay/include/dt-bindings/sound/qcom,q6afe.h"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel authors"
+SPDX-License-Identifier = "GPL-2.0-only"
+
+[[annotations]]
+path = "overlay/include/dt-bindings/sound/qcom,q6dsp-lpass-ports.h"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel authors"
+SPDX-License-Identifier = "GPL-2.0-only"

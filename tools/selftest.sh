@@ -83,7 +83,9 @@ if lsmod | grep -q '^hm1092'; then pass "IR camera driver hm1092 loaded"; else w
 [ -e /dev/howdy-ir ] && pass "/dev/howdy-ir present (Howdy setup)"
 
 # --- keyboard ---
-if ls /sys/class/leds 2>/dev/null | grep -q 'kbd_backlight'; then pass "keyboard backlight LED"
+kbd_led=no
+for l in /sys/class/leds/*kbd_backlight*; do [ -e "$l" ] && kbd_led=yes; done
+if [ "$kbd_led" = yes ]; then pass "keyboard backlight LED"
 else warn "no keyboard backlight LED (hid-asus-ec not loaded; HID-BPF setups have none)"; fi
 
 # --- EC and fans ---

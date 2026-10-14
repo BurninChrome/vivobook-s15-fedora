@@ -9,21 +9,21 @@ jobs:
     runs-on: ubuntu-24.04-arm
     container: registry.fedoraproject.org/fedora:45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install tools
-        run: dnf -y install dtc python3-pip ShellCheck git-core xz
+        run: dnf -y install dtc ShellCheck git-core xz reuse
       - name: ShellCheck
         run: shellcheck -S warning tools/*.sh hooks/apply-dtb hooks/apply-ucm hooks/lpass-rpm-on hooks/30-vivobook-s15.install overlay/*.sh packaging/kernel/*.sh userspace/*/*.sh
       - name: REUSE compliance
-        run: pip install reuse && reuse lint
+        run: reuse lint
       - name: Privacy scan (fails on any hit outside the allow list)
-        run: tools/scan-private.sh -o scan.txt . || (cat scan.txt; exit 1)
+        run: tools/scan-private.sh -x .scan-private-allow -o scan.txt . || { cat scan.txt; exit 1; }
 
   overlay:
     runs-on: ubuntu-24.04-arm
     container: registry.fedoraproject.org/fedora:45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install tools
         run: dnf -y install dtc cpp make python3 kernel-core
       - name: Build overlays and apply them to the stock DTB
@@ -34,7 +34,7 @@ jobs:
   patches:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Check that the series applies to the upstream base
         run: |
           . packaging/kernel/BASE

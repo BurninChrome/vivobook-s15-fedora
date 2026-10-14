@@ -8,7 +8,7 @@ Device tree additions, kernel patches, packaging and tools that make
 > Qualcomm or the Fedora Project. Everything here changes how your laptop boots
 > and talks to its embedded controller. Read [Warnings](#warnings) first.
 
-<!-- Identity tokens (BurninChrome etc.) are set in identity.conf, see tools/set-identity.sh. -->
+<!-- Owner and author names come from identity.conf (tools/set-identity.sh). -->
 
 ## Status
 

@@ -29,7 +29,7 @@ for v in OWNER AUTHOR AUTHOR_EMAIL; do
 done
 
 mapfile -t files < <(git grep -l -I -E '@(OWNER|AUTHOR|AUTHOR_EMAIL)@' -- . \
-	':!identity.conf' ':!tools/set-identity.sh' || true)
+	':!identity.conf' ':!tools/set-identity.sh' ':!tools/README.md' || true)
 if [ ${#files[@]} -eq 0 ]; then
 	echo "no tokens left"
 else
