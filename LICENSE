@@ -1,0 +1,16 @@
+This repository contains files under several licenses.
+
+Each file carries an SPDX-License-Identifier header, and REUSE.toml assigns a
+license to files that cannot carry one. The full license texts are in
+LICENSES/:
+
+  LICENSES/GPL-2.0-only.txt   kernel patches, kernel modules
+  LICENSES/BSD-3-Clause.txt   device tree fragments
+  LICENSES/BSD-2-Clause.txt   dual-licensed kernel headers in overlay/include/
+  LICENSES/MIT.txt            scripts, hooks, packaging, documentation
+  (GPL-2.0.txt and the dual licenses cover the unmodified kernel headers
+  in overlay/include/)
+
+Third-party files keep their original license and copyright notices.
+
+No firmware, BIOS images, ACPI tables or Windows drivers are distributed here.

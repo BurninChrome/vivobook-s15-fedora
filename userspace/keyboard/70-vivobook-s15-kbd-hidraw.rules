@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+# Access to the hidraw node of the ASUS Vivobook S 15 keyboard (0B05:4543) for
+# the locally logged-in user (uaccess), so kb-bl.py works without root.
+SUBSYSTEM=="hidraw", KERNELS=="0018:0B05:4543.*", TAG+="uaccess"

@@ -1,0 +1,6 @@
+[Unit]
+Description=Restore the ASUS Vivobook S 15 UCM profile
+
+[Service]
+Type=oneshot
+ExecStart=@LIBEXECDIR@/vivobook-s15/apply-ucm

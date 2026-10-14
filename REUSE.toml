@@ -1,0 +1,32 @@
+# REUSE specification 3.3: https://reuse.software/spec-3.3/
+# Check with: reuse lint
+# Files with their own SPDX header keep it; these annotations cover the rest.
+version = 1
+
+[[annotations]]
+path = [
+  "*.md", "docs/**", ".github/**", ".copr/**", ".gitignore", "identity.conf",
+  "packaging/**", "hooks/*.path", "hooks/*.service", "hooks/*.conf", "hooks/README.md",
+  "kernel/README.md", "kernel/config/**", "kernel/patches/series", "overlay/README.md",
+  "overlay/include/VERSION", "tools/README.md", "userspace/**/README.md",
+  "userspace/**/*.service", "userspace/**/*.timer", "userspace/**/*.plymouth",
+  "userspace/howdy/video_capture-camss.patch",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "The vivobook-s15-fedora contributors"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["ucm/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "The vivobook-s15-fedora contributors and The x1e-vivobook-s15-linux-audio contributors"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["kernel/patches/*.patch"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "See the From: and Signed-off-by: lines of each patch"
+SPDX-License-Identifier = "GPL-2.0-only"
+
+# overlay/include/ holds unmodified headers from the kernel tree; they keep
+# their own SPDX headers.

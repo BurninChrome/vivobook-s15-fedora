@@ -1,0 +1,10 @@
+[Unit]
+Description=ath12k Wi-Fi watchdog every 30 s (vivobook-s15-fedora)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

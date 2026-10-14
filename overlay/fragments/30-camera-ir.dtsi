@@ -1,0 +1,148 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * IR camera of the ASUS Vivobook S 15 (S5507QAD): Himax HM1092 and the IR
+ * LED. Needs the HM1092 driver (kernel/patches/0200-0202) and the CCI GDSC
+ * fix (0010).
+ *
+ * REQUIRES 20-camera-rgb.dtsi: labels camcc, cci0, cci0_i2c0, camss (legacy
+ * binding, built-in CSIPHYs) and the regulators-8 node (PM8010 "m") with its
+ * supply inputs.
+ *
+ * Origin of the values:
+ *  - AeoB CAMI_RES_QRD (\_SB.CAMI, this laptop): LDO4_M 1 808 000 uV,
+ *    LDO7_M 2 912 000 uV, reset TLMM 109 (low, MCLK, high, 1 ms),
+ *    cam_cc_mclk0_clk 24 MHz.
+ *  - AeoB SCFG_AUX_QRD: hm1092, field 0x00050048 -> 8 bit address 0x48,
+ *    7 bit 0x24.
+ *  - AeoB CAMP_RES_QRD: Windows muxes gpio96/97/98 to function 1
+ *    (cam_mclk), gpio100 cam_aon (MCLK4 of the RGB camera), gpio101..106
+ *    cci_i2c. MCLK0 = gpio96.
+ *  - Zenbook A14 DT (Ramshouriesh R, RFC "[PATCH 5/9]", 2026-06-10): same
+ *    supplies and reset; HM1092 on cci0_i2c0 @ 0x24, CSIPHY0, one lane,
+ *    MCLK0 on gpio96, IR LED = PM8550 flash channel 4. The CCI bus and
+ *    CSIPHY for the S15 are taken from there (first byte of the SCFG field:
+ *    IR 0x05, RGB 0x15 on cci1, hence IR on cci0); confirmed by a working
+ *    picture.
+ *  - link-frequencies 180 MHz: the v6 driver accepts only this value
+ *    (PLL 24 MHz * 90 / 12); the A14 DT value of 400 MHz would be rejected.
+ *
+ * IR LED: same wiring as the A14, confirmed by the strobe. To build without
+ * the LED, add "#define VIVOBOOK_IR_NO_LED" before this fragment (or use the
+ * module parameter hm1092.ir_led=0). The driver strobes it 50 ms every
+ * 100 ms at flash-max-microamp (700 mA); led-max-microamp (torch mode from
+ * sysfs) is limited to 180 mA as on the A14.
+ */
+
+#include <dt-bindings/clock/qcom,x1e80100-camcc.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/leds/common.h>
+#include <dt-bindings/media/video-interfaces.h>
+#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+
+&apps_rsc {
+	/* PM8010 "m": node and supply inputs are declared in 20-camera-rgb.dtsi */
+	regulators-8 {
+		/* vdd-l3-l4 = vreg_s4c_1p8 */
+		vreg_l4m_1p8: ldo4 {
+			regulator-name = "vreg_l4m_1p8";
+			regulator-min-microvolt = <1800000>;	/* pldo502ln: 1.8, 2.0, 2.2, 2.608+ V; the AeoB value 1.808 V is not available */
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* vdd-l7 = vreg_bob1 */
+		vreg_l7m_2p9: ldo7 {
+			regulator-name = "vreg_l7m_2p9";
+			regulator-min-microvolt = <2912000>;
+			regulator-max-microvolt = <2912000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+};
+
+&tlmm {
+	cam_ir_default: cam-ir-default-state {
+		mclk-pins {
+			pins = "gpio96";
+			function = "cam_mclk";
+			drive-strength = <16>;
+			bias-disable;
+		};
+
+		reset-n-pins {
+			pins = "gpio109";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-disable;
+		};
+	};
+};
+
+#ifndef VIVOBOOK_IR_NO_LED
+&pm8550_flash {
+	status = "okay";
+
+	ir_flash: led-0 {
+		function = LED_FUNCTION_FLASH;
+		color = <LED_COLOR_ID_IR>;
+		led-sources = <4>;
+		led-max-microamp = <180000>;
+		flash-max-microamp = <700000>;
+		flash-max-timeout-us = <1280000>;
+	};
+};
+#endif
+
+&camss {
+	ports {
+		/* port@0 => CSIPHY0 */
+		port@0 {
+			reg = <0>;
+
+			camss_csiphy0_ep: endpoint {
+				bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
+				clock-lanes = <7>;
+				data-lanes = <0>;
+				remote-endpoint = <&hm1092_ep>;
+			};
+		};
+	};
+};
+
+&cci0 {
+	status = "okay";
+};
+
+&cci0_i2c0 {
+	camera@24 {
+		compatible = "himax,hm1092";
+		reg = <0x24>;
+
+		reset-gpios = <&tlmm 109 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&cam_ir_default>;
+
+		clocks = <&camcc CAM_CC_MCLK0_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK0_CLK>;
+		assigned-clock-rates = <24000000>;
+
+		orientation = <0>;	/* front */
+
+#ifndef VIVOBOOK_IR_NO_LED
+		/* no led-names: the v4l2 "privacy" lookup returns -ENOENT, not an error */
+		leds = <&ir_flash>;
+#endif
+
+		avdd-supply = <&vreg_l7m_2p9>;
+		dvdd-supply = <&vreg_l7m_2p9>;
+		dovdd-supply = <&vreg_l4m_1p8>;
+
+		port {
+			hm1092_ep: endpoint {
+				data-lanes = <1>;
+				link-frequencies = /bits/ 64 <180000000>;
+				remote-endpoint = <&camss_csiphy0_ep>;
+			};
+		};
+	};
+};

@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Anvesh Jain P <anvesh.p@oss.qualcomm.com>
+Date: Tue, 28 Jul 2026 23:14:33 +0530
+Subject: [PATCH] platform: arm64: qcom-hamoa-ec: Verify required I2C adapter
+ functionality
+
+Check the underlying I2C adapter supports both the raw I2C transfers
+used by the fan RPM/LUT commands and the SMBus byte and block-write
+transfers used by the other EC commands, and fail probe early with a
+clear error if it doesn't.
+
+Signed-off-by: Anvesh Jain P <anvesh.p@oss.qualcomm.com>
+---
+ drivers/platform/arm64/qcom-hamoa-ec.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/platform/arm64/qcom-hamoa-ec.c b/drivers/platform/arm64/qcom-hamoa-ec.c
+index d0c45d997..a420a180a 100644
+--- a/drivers/platform/arm64/qcom-hamoa-ec.c
++++ b/drivers/platform/arm64/qcom-hamoa-ec.c
+@@ -1195,6 +1195,11 @@ static int qcom_ec_probe(struct i2c_client *client)
+ 	unsigned int i;
+ 	int ret;
+ 
++	if (!i2c_check_functionality(client->adapter,
++				     I2C_FUNC_I2C | I2C_FUNC_SMBUS_BYTE_DATA |
++				     I2C_FUNC_SMBUS_WRITE_I2C_BLOCK))
++		return -EOPNOTSUPP;
++
+ 	ec = devm_kzalloc(dev, sizeof(*ec), GFP_KERNEL);
+ 	if (!ec)
+ 		return -ENOMEM;

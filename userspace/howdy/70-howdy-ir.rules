@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+# ASUS Vivobook S 15: stable name of the IR camera video node for Howdy.
+# RDI0 output of the second CAMSS VFE, where camss_reader routes the HM1092.
+SUBSYSTEM=="video4linux", KERNEL=="video*", ATTR{name}=="msm_vfe1_video0", SYMLINK+="howdy-ir"

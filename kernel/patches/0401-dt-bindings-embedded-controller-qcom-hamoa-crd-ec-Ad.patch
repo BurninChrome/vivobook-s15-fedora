@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Anvesh Jain P <anvesh.p@oss.qualcomm.com>
+Date: Tue, 28 Jul 2026 23:14:29 +0530
+Subject: [PATCH] dt-bindings: embedded-controller: qcom,hamoa-crd-ec: Add
+ qcom,tsens
+
+Add the qcom,tsens property so Hamoa-based boards can list the tsens
+providers, and how many leading sensor IDs on each, whose readings the
+driver averages to compute the SoC junction temperature reported to
+the EC for fan control.
+
+The generic thermal-sensors property has no standard semantic for
+selecting a range of sensor IDs from a provider without enumerating
+each one, so a vendor-specific phandle-array with an explicit sensor
+count is used instead.
+
+Signed-off-by: Anvesh Jain P <anvesh.p@oss.qualcomm.com>
+---
+ .../qcom,hamoa-crd-ec.yaml                    | 31 +++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/embedded-controller/qcom,hamoa-crd-ec.yaml b/Documentation/devicetree/bindings/embedded-controller/qcom,hamoa-crd-ec.yaml
+index ac5a08f8f..ee748e73c 100644
+--- a/Documentation/devicetree/bindings/embedded-controller/qcom,hamoa-crd-ec.yaml
++++ b/Documentation/devicetree/bindings/embedded-controller/qcom,hamoa-crd-ec.yaml
+@@ -32,11 +32,40 @@ properties:
+   interrupts:
+     maxItems: 1
+ 
++  # A generic "thermal-sensors" phandle only identifies individual sensor
++  # IDs, and thermal zones are a Linux-side grouping of those sensors, not
++  # a devicetree concept the EC cares about. What the driver actually needs
++  # is raw readings from a contiguous range of leading sensor IDs on each
++  # tsens provider, averaged together, so qcom,tsens pairs each provider
++  # phandle with a count instead of enumerating every sensor cell.
++  qcom,tsens:
++    description:
++      List of tsens providers and, for each, the number of leading sensor
++      IDs on that provider whose readings are averaged to compute the SoC
++      junction temperature reported to the EC for fan control. Only
++      applicable for Hamoa based devices.
++    $ref: /schemas/types.yaml#/definitions/phandle-array
++    minItems: 1
++    maxItems: 2
++    items:
++      items:
++        - description: phandle to a tsens thermal-sensor provider
++        - description: number of leading sensor IDs on that provider to average
++
+ required:
+   - compatible
+   - reg
+   - interrupts
+ 
++if:
++  properties:
++    compatible:
++      contains:
++        const: qcom,glymur-crd-ec
++then:
++  properties:
++    qcom,tsens: false
++
+ additionalProperties: false
+ 
+ examples:
+@@ -51,6 +80,8 @@ examples:
+             reg = <0x76>;
+ 
+             interrupts-extended = <&tlmm 66 IRQ_TYPE_LEVEL_HIGH>;
++
++            qcom,tsens = <&tsens3 2>;
+         };
+     };
+ ...

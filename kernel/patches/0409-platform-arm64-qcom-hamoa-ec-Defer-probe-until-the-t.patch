@@ -1,0 +1,152 @@
+From a66ab7724ae8a56a9a025afe52cb25a9b151082e Mon Sep 17 00:00:00 2001
+From: Kacper Goc <11682528+BurninChrome@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 12:02:50 +0200
+Subject: [PATCH] platform: arm64: qcom-hamoa-ec: Defer probe until the tsens
+ sensors are bound
+
+qcom,tsens is not known to fw_devlink, so the EC can probe while
+qcom_tsens is still loading. On the ASUS Vivobook S 15 (7.3 kernel) this
+happened on every boot:
+- the thermal zones were not registered yet, no SoC Tj zone was found
+  and the EC never got a temperature (fans stuck at the EC default),
+- device_link_add() to the unbound sensor left a dormant managed link
+  and device_links_driver_bound() warned once per sensor
+  (drivers/base/core.c:1454).
+
+Defer probe until each sensor device is bound. Only set up the Tj work,
+pin the module and report "Reporting SoC Tj" when at least one zone was
+found, and key the suspend, resume, shutdown and remove paths on the
+work actually running. On Tj keepalive ECs also pin the sensor driver
+module, since unloading it would unbind the EC through the device link
+and stop the feed.
+
+Assisted-by: LLM (Claude Opus 5.5)
+---
+ drivers/platform/arm64/qcom-hamoa-ec.c | 41 +++++++++++++++++++++-----
+ 1 file changed, 34 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/platform/arm64/qcom-hamoa-ec.c b/drivers/platform/arm64/qcom-hamoa-ec.c
+index 61e35273d..c4c8256b0 100644
+--- a/drivers/platform/arm64/qcom-hamoa-ec.c
++++ b/drivers/platform/arm64/qcom-hamoa-ec.c
+@@ -262,6 +262,7 @@ struct qcom_ec {
+ 	struct workqueue_struct *tj_wq;
+ 	unsigned long tj_last_ok;	/* jiffies of the last successful Tj report */
+ 	u16 tj_last;			/* last reported Tj, 0.1 deg C */
++	bool tj_running;		/* periodic Tj reporting is set up */
+ 	bool tj_armed;			/* EC has received a Tj, the feed must go on */
+ 	bool tj_crit_logged;
+ 	u8 fan_profile;
+@@ -547,6 +548,18 @@ static int qcom_ec_setup_soc_tj_zones(struct qcom_ec *ec)
+ 			return -EPROBE_DEFER;
+ 		}
+ 
++		/*
++		 * The sensor registers its thermal zones in its own probe, and
++		 * qcom,tsens is not known to fw_devlink. Linking to an unbound
++		 * supplier also leaves a dormant link that trips a WARN in
++		 * device_links_driver_bound().
++		 */
++		if (!device_is_bound(&sensor_pdev->dev)) {
++			put_device(&sensor_pdev->dev);
++			of_node_put(args.np);
++			return -EPROBE_DEFER;
++		}
++
+ 		/* Ensure we unbind before the sensor frees its zones */
+ 		if (!device_link_add(dev, &sensor_pdev->dev, DL_FLAG_AUTOREMOVE_CONSUMER)) {
+ 			dev_err(dev, "Failed to link to sensor %pOF\n", args.np);
+@@ -554,6 +567,13 @@ static int qcom_ec_setup_soc_tj_zones(struct qcom_ec *ec)
+ 			of_node_put(args.np);
+ 			return -ENODEV;
+ 		}
++
++		/*
++		 * Unloading the sensor driver would unbind us through the link
++		 * and stop the Tj feed a keepalive EC depends on.
++		 */
++		if (qcom_ec_tj_keepalive(ec) && sensor_pdev->dev.driver)
++			__module_get(sensor_pdev->dev.driver->owner);
+ 		put_device(&sensor_pdev->dev);
+ 
+ 		for (id = 0; id < args.args[0]; id++) {
+@@ -1271,7 +1291,7 @@ static int qcom_ec_resume(struct device *dev)
+ 	if (qcom_ec_owns_fans(ec) && !ec->calib_done)
+ 		queue_work(system_long_wq, &ec->fan_calib_work);
+ 
+-	if (ec->lut_cfg && ec->lut_cfg->send_soc_tj) {
++	if (ec->tj_running) {
+ 		enable_delayed_work(&ec->soc_tj_work);
+ 		/* Report right away, the EC watchdog runs again after MS exit */
+ 		queue_delayed_work(ec->tj_wq, &ec->soc_tj_work, 0);
+@@ -1291,12 +1311,12 @@ static int qcom_ec_suspend(struct device *dev)
+ 		cancel_work_sync(&ec->psy_work);
+ 	}
+ 
+-	if (qcom_ec_tj_keepalive(ec) && !allow_suspend) {
++	if (qcom_ec_tj_keepalive(ec) && ec->tj_running && !allow_suspend) {
+ 		dev_warn(dev, "Suspend refused: EC needs a constant SoC Tj feed (see allow_suspend)\n");
+ 		return -EBUSY;
+ 	}
+ 
+-	if (ec->lut_cfg && ec->lut_cfg->send_soc_tj) {
++	if (ec->tj_running) {
+ 		disable_delayed_work_sync(&ec->soc_tj_work);
+ 		/* Fresh report right before MS enter */
+ 		qcom_ec_send_soc_tj_temp(ec);
+@@ -1307,7 +1327,7 @@ static int qcom_ec_suspend(struct device *dev)
+ 					EC_MODERN_STANDBY_ENTER);
+ 	mutex_unlock(&ec->io_lock);
+ 
+-	if (ret && ec->lut_cfg && ec->lut_cfg->send_soc_tj) {
++	if (ret && ec->tj_running) {
+ 		/* Suspend is aborted and our resume will not run: keep feeding */
+ 		enable_delayed_work(&ec->soc_tj_work);
+ 		queue_delayed_work(ec->tj_wq, &ec->soc_tj_work, 0);
+@@ -1325,7 +1345,7 @@ static void qcom_ec_shutdown(struct i2c_client *client)
+ {
+ 	struct qcom_ec *ec = i2c_get_clientdata(client);
+ 
+-	if (!ec || !qcom_ec_tj_keepalive(ec) || !shutdown_ms_enter)
++	if (!ec || !qcom_ec_tj_keepalive(ec) || !ec->tj_running || !shutdown_ms_enter)
+ 		return;
+ 
+ 	disable_delayed_work_sync(&ec->soc_tj_work);
+@@ -1518,7 +1538,12 @@ static int qcom_ec_probe(struct i2c_client *client)
+ 		ret = qcom_ec_setup_soc_tj_zones(ec);
+ 		if (ret < 0)
+ 			return dev_err_probe(dev, ret, "Failed to setup SoC Tj thermal zones\n");
++	}
++
++	if (ec->lut_cfg && ec->lut_cfg->send_soc_tj && !ec->num_soc_tj_zones)
++		dev_warn(dev, "No SoC Tj thermal zone found, not reporting Tj to the EC\n");
+ 
++	if (ec->lut_cfg && ec->lut_cfg->send_soc_tj && ec->num_soc_tj_zones) {
+ 		ec->tj_wq = devm_alloc_ordered_workqueue(dev, "qcom_ec_tj",
+ 							 WQ_HIGHPRI | WQ_MEM_RECLAIM);
+ 		if (!ec->tj_wq)
+@@ -1544,9 +1569,11 @@ static int qcom_ec_probe(struct i2c_client *client)
+ 			 * either, unbind is suppressed for the whole driver).
+ 			 */
+ 			__module_get(THIS_MODULE);
+-			dev_info(dev, "Reporting SoC Tj to the EC, module pinned\n");
++			dev_info(dev, "Reporting SoC Tj from %d thermal zones to the EC, module pinned\n",
++				 ec->num_soc_tj_zones);
+ 		}
+ 
++		ec->tj_running = true;
+ 		queue_delayed_work(ec->tj_wq, &ec->soc_tj_work, EC_SOC_TJ_TEMP_POLL_JIFFIES);
+ 	}
+ 
+@@ -1617,7 +1644,7 @@ static void qcom_ec_remove(struct i2c_client *client)
+ 		disable_work_sync(&ec->fan_calib_work);
+ 	}
+ 
+-	if (ec->lut_cfg && ec->lut_cfg->send_soc_tj)
++	if (ec->tj_running)
+ 		disable_delayed_work_sync(&ec->soc_tj_work);
+ 
+ 	for (int i = 0; ec->ec_cdev && i < ec->thermal_cap.fan_cnt; i++) {
+-- 
+2.56.0
+

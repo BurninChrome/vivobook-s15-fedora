@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# Optional user service: set the OV02C10 digital gain after login.
+#   install -D -m 0755 set-digital-gain.sh ~/.local/bin/set-digital-gain.sh
+#   install -D -m 0644 ov02c10-digital-gain.service ~/.config/systemd/user/ov02c10-digital-gain.service
+#   systemctl --user daemon-reload && systemctl --user enable --now ov02c10-digital-gain.service
+# Change the value in ExecStart (1024 = 1x).
+[Unit]
+Description=OV02C10 digital gain (brighter camera picture in low light)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/set-digital-gain.sh 2048
+
+[Install]
+WantedBy=default.target

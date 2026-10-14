@@ -1,0 +1,378 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kacper Goc <11682528+BurninChrome@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 11:01:11 +0200
+Subject: [PATCH] platform: arm64: qcom-hamoa-ec: Add ASUS Vivobook S 15
+ support
+
+The EC of the ASUS Vivobook S 15 (S5507QA, x1e80100) sits at address
+0x76 on QUP_0_SE_5 (i2c5) with its interrupt on TLMM GPIO 66 and speaks
+the Hamoa reference protocol: the ASUS DSDT (BIOS 367) defines the same
+commands (0x05, 0x0e, 0x20-0x35) and the same SCI events 0x30-0x3d.
+
+Unlike the reference boards, the EC firmware ships with an ASUS fan
+curve, so the driver must not calibrate the fans, program LUTs, switch
+fan profiles or put the fans into debug mode. Add an fw_fan_curve flag
+for that and only report the SoC junction temperature, which the EC
+needs to ramp up the fans under load.
+
+The DSDT has no field for the thermal capability command (0x42), so
+fall back to a board default fan count when it is missing.
+
+Expose fan speeds (command 0x22) through hwmon, plus the EC thermistors
+(0x29-0x2f) when the EC reports them in its thermal capabilities; the
+Vivobook EC reports none and answers those commands with zeros or a
+stale response. Log the ASUS specific SCI events at debug level.
+
+Add tj_offset_dk and thermistor_kelvin module parameters while the
+temperature units used by the ASUS firmware are being confirmed.
+
+Assisted-by: LLM (Claude Opus 5.5)
+---
+ .../qcom,hamoa-crd-ec.yaml                    |   1 +
+ drivers/platform/arm64/Kconfig                |   1 +
+ drivers/platform/arm64/qcom-hamoa-ec.c        | 184 ++++++++++++++++--
+ 3 files changed, 175 insertions(+), 11 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/embedded-controller/qcom,hamoa-crd-ec.yaml b/Documentation/devicetree/bindings/embedded-controller/qcom,hamoa-crd-ec.yaml
+index ee748e73c..5e62556d7 100644
+--- a/Documentation/devicetree/bindings/embedded-controller/qcom,hamoa-crd-ec.yaml
++++ b/Documentation/devicetree/bindings/embedded-controller/qcom,hamoa-crd-ec.yaml
+@@ -24,6 +24,7 @@ properties:
+               - qcom,hamoa-iot-evk-ec
+           - const: qcom,hamoa-crd-ec
+       - enum:
++          - asus,vivobook-s15-ec
+           - qcom,hamoa-crd-ec
+ 
+   reg:
+diff --git a/drivers/platform/arm64/Kconfig b/drivers/platform/arm64/Kconfig
+index e32e01b2a..ffa8e2ee9 100644
+--- a/drivers/platform/arm64/Kconfig
++++ b/drivers/platform/arm64/Kconfig
+@@ -95,6 +95,7 @@ config EC_QCOM_HAMOA
+ 	depends on ARCH_QCOM || COMPILE_TEST
+ 	depends on I2C
+ 	depends on THERMAL || THERMAL=n
++	depends on HWMON || HWMON=n
+ 	help
+ 	  Say M or Y here to enable the Embedded Controller driver for Qualcomm
+ 	  Snapdragon-based Hamoa/Glymur reference devices. The driver handles fan
+diff --git a/drivers/platform/arm64/qcom-hamoa-ec.c b/drivers/platform/arm64/qcom-hamoa-ec.c
+index 122ae27c2..922347b0a 100644
+--- a/drivers/platform/arm64/qcom-hamoa-ec.c
++++ b/drivers/platform/arm64/qcom-hamoa-ec.c
+@@ -12,6 +12,7 @@
+ #include <linux/device.h>
+ #include <linux/dev_printk.h>
+ #include <linux/err.h>
++#include <linux/hwmon.h>
+ #include <linux/i2c.h>
+ #include <linux/interrupt.h>
+ #include <linux/kernel.h>
+@@ -33,6 +34,7 @@
+ #define EC_FAN_PROFILE_CMD	0x24
+ #define EC_SET_FAN_LUT_CMD	0x28
+ #define EC_FAN_DBG_CONTROL_CMD	0x30
++#define EC_THERMISTOR_READ_CMD	0x29	/* 0x29 - 0x2f: thermistor 1 - 7 */
+ #define EC_SCI_EVT_CONTROL_CMD	0x35
+ #define EC_THERMAL_CAP_CMD	0x42
+ 
+@@ -62,6 +64,14 @@
+ #define EC_FAN_NAME_SIZE	20
+ #define EC_FAN_MAX_PWM		255
+ 
++static int tj_offset_dk;
++module_param(tj_offset_dk, int, 0644);
++MODULE_PARM_DESC(tj_offset_dk, "Offset in 0.1 degree units added to the SoC Tj sent to the EC (2732 for an EC expecting 0.1 K)");
++
++static bool thermistor_kelvin;
++module_param(thermistor_kelvin, bool, 0644);
++MODULE_PARM_DESC(thermistor_kelvin, "EC thermistor readings are in 0.1 K instead of 0.1 degC");
++
+ #define EC_SOC_TJ_TEMP_POLL_JIFFIES	msecs_to_jiffies(125)
+ 
+ /*
+@@ -109,6 +119,13 @@ struct qcom_ec_lut_config {
+ 	u8 num_temps;
+ 	bool send_soc_tj;
+ 	bool skip_lut_set;
++	/*
++	 * OEM EC firmware owns the fan curve: never calibrate, program LUTs,
++	 * switch fan profiles or put the fans into debug mode.
++	 */
++	bool fw_fan_curve;
++	/* Fan count to assume when the EC lacks the thermal capability command */
++	u8 default_fan_cnt;
+ };
+ 
+ static const struct qcom_ec_fan_lut_temp_entry hamoa_lut_temps[] = {
+@@ -173,6 +190,18 @@ static const struct qcom_ec_lut_config glymur_lut_config = {
+ 	.send_soc_tj              = false,
+ };
+ 
++/*
++ * ASUS Vivobook S 15 (S5507QA): the EC speaks the Hamoa reference protocol
++ * but ships with an ASUS fan curve. Only report SoC Tj and read back fan
++ * speeds and thermistors; the LUT/profile machinery would overwrite the
++ * ASUS tuning.
++ */
++static const struct qcom_ec_lut_config asus_vivobook_s15_config = {
++	.send_soc_tj              = true,
++	.fw_fan_curve             = true,
++	.default_fan_cnt          = 2,
++};
++
+ static_assert(ARRAY_SIZE(hamoa_lut_temps) <= EC_MAX_LUT_ENTRIES);
+ static_assert(ARRAY_SIZE(glymur_lut_temps) <= EC_MAX_LUT_ENTRIES);
+ 
+@@ -221,6 +250,12 @@ struct qcom_ec {
+ 	bool calib_done;
+ };
+ 
++/* True when the driver, not the EC firmware, manages the fan curve */
++static bool qcom_ec_owns_fans(struct qcom_ec *ec)
++{
++	return ec->lut_cfg && !ec->lut_cfg->fw_fan_curve && ec->thermal_cap.fan_cnt;
++}
++
+ static int qcom_ec_write(struct qcom_ec *ec, u8 cmd, const u8 *data, size_t len)
+ {
+ 	struct i2c_msg msg;
+@@ -552,7 +587,7 @@ static int qcom_ec_send_soc_tj_temp(struct qcom_ec *ec)
+ 		return 0;
+ 
+ 	/* Convert millidegrees Celsius to 0.1 deg C units as required by EC */
+-	temp = clamp(total / valid / 100, 0, (int)U16_MAX);
++	temp = clamp(total / valid / 100 + tj_offset_dk, 0, (int)U16_MAX);
+ 	request[0] = EC_SOC_TEMP_SOURCE_TJ;
+ 	request[1] = EC_SOC_TEMP_DATA_SIZE;
+ 	request[2] = temp & 0xff;
+@@ -816,7 +851,7 @@ static void qcom_ec_restore_fan_state(struct qcom_ec *ec)
+ {
+ 	bool calib_done;
+ 
+-	if (!ec->lut_cfg || !ec->thermal_cap.fan_cnt)
++	if (!qcom_ec_owns_fans(ec))
+ 		return;
+ 
+ 	mutex_lock(&ec->io_lock);
+@@ -896,6 +931,15 @@ static irqreturn_t qcom_ec_irq(int irq, void *data)
+ 		dev_dbg_ratelimited(dev, "EC recovered from reset\n");
+ 		qcom_ec_restore_fan_state(ec);
+ 		break;
++	case 0x18:
++	case 0x1a:
++	case 0x1c:
++	case 0xda:
++	case 0xdb:
++	case 0xe0:
++		/* ASUS specific events, handled by ACPI on Windows */
++		dev_dbg_ratelimited(dev, "OEM EC event: 0x%02x\n", val);
++		break;
+ 	default:
+ 		dev_notice_ratelimited(dev, "Unknown EC event: %d\n", val);
+ 		break;
+@@ -1181,7 +1225,7 @@ static int qcom_ec_resume(struct device *dev)
+ 	if (ret)
+ 		return ret;
+ 
+-	if (ec->lut_cfg && ec->thermal_cap.fan_cnt && !ec->calib_done)
++	if (qcom_ec_owns_fans(ec) && !ec->calib_done)
+ 		queue_work(system_long_wq, &ec->fan_calib_work);
+ 
+ 	if (ec->lut_cfg && ec->lut_cfg->send_soc_tj) {
+@@ -1197,13 +1241,11 @@ static int qcom_ec_suspend(struct device *dev)
+ 	struct qcom_ec *ec = i2c_get_clientdata(client);
+ 	int ret;
+ 
+-	if (ec->lut_cfg && ec->thermal_cap.fan_cnt) {
++	if (qcom_ec_owns_fans(ec)) {
+ 		complete_all(&ec->calib_abort);
+ 		cancel_work_sync(&ec->fan_calib_work);
+-	}
+-
+-	if (ec->lut_cfg)
+ 		cancel_work_sync(&ec->psy_work);
++	}
+ 
+ 	if (ec->lut_cfg && ec->lut_cfg->send_soc_tj)
+ 		disable_delayed_work_sync(&ec->soc_tj_work);
+@@ -1216,6 +1258,116 @@ static int qcom_ec_suspend(struct device *dev)
+ 	return ret;
+ }
+ 
++#if IS_REACHABLE(CONFIG_HWMON)
++/*
++ * EC Thermistor Read (commands 0x29 - 0x2f for thermistor 1 - 7):
++ *
++ * Read Response:
++ * ---------------------------------------------------------------
++ * | Offset	| Name		| Description			|
++ * ---------------------------------------------------------------
++ * | 0x00	| Byte count = 2| Number of data bytes		|
++ * ---------------------------------------------------------------
++ * | 0x01 (LSB)| Temperature	| 0.1 degree units		|
++ * | 0x02	|		|				|
++ * ---------------------------------------------------------------
++ */
++static int qcom_ec_read_thermistor(struct qcom_ec *ec, int idx, long *mdeg)
++{
++	u8 resp[3];
++	int raw, ret;
++
++	mutex_lock(&ec->io_lock);
++	ret = qcom_ec_read(ec, EC_THERMISTOR_READ_CMD + idx, NULL, 0, sizeof(resp), resp);
++	mutex_unlock(&ec->io_lock);
++	if (ret < 0)
++		return ret;
++
++	raw = resp[1] | (resp[2] << 8);
++	if (raw == 0x0fff || raw == 0xffff)
++		return -ENODATA;
++
++	*mdeg = thermistor_kelvin ? raw * 100L - 273150 : raw * 100L;
++
++	return 0;
++}
++
++static umode_t qcom_ec_hwmon_is_visible(const void *data, enum hwmon_sensor_types type,
++					u32 attr, int channel)
++{
++	const struct qcom_ec *ec = data;
++
++	switch (type) {
++	case hwmon_fan:
++		return channel < ec->thermal_cap.fan_cnt ? 0444 : 0;
++	case hwmon_temp:
++		/*
++		 * Without a thermistor mask the EC answers the thermistor
++		 * commands with zeros or a stale response, so hide them.
++		 */
++		return ec->thermal_cap.thermistor_mask & BIT(channel) ? 0444 : 0;
++	default:
++		return 0;
++	}
++}
++
++static int qcom_ec_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
++			      u32 attr, int channel, long *val)
++{
++	struct qcom_ec *ec = dev_get_drvdata(dev);
++	u16 rpm;
++	int ret;
++
++	switch (type) {
++	case hwmon_fan:
++		mutex_lock(&ec->io_lock);
++		ret = qcom_ec_get_fan_rpm(ec, channel + 1, &rpm);
++		mutex_unlock(&ec->io_lock);
++		if (ret < 0)
++			return ret;
++		*val = rpm;
++		return 0;
++	case hwmon_temp:
++		return qcom_ec_read_thermistor(ec, channel, val);
++	default:
++		return -EOPNOTSUPP;
++	}
++}
++
++static const struct hwmon_channel_info * const qcom_ec_hwmon_info[] = {
++	HWMON_CHANNEL_INFO(fan, HWMON_F_INPUT, HWMON_F_INPUT),
++	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT, HWMON_T_INPUT, HWMON_T_INPUT,
++			   HWMON_T_INPUT, HWMON_T_INPUT, HWMON_T_INPUT, HWMON_T_INPUT),
++	NULL
++};
++
++static const struct hwmon_ops qcom_ec_hwmon_ops = {
++	.is_visible = qcom_ec_hwmon_is_visible,
++	.read = qcom_ec_hwmon_read,
++};
++
++static const struct hwmon_chip_info qcom_ec_hwmon_chip_info = {
++	.ops = &qcom_ec_hwmon_ops,
++	.info = qcom_ec_hwmon_info,
++};
++
++static int qcom_ec_hwmon_register(struct qcom_ec *ec)
++{
++	struct device *dev = &ec->client->dev;
++	struct device *hwmon;
++
++	hwmon = devm_hwmon_device_register_with_info(dev, "qcom_hamoa_ec", ec,
++						     &qcom_ec_hwmon_chip_info, NULL);
++
++	return PTR_ERR_OR_ZERO(hwmon);
++}
++#else
++static int qcom_ec_hwmon_register(struct qcom_ec *ec)
++{
++	return 0;
++}
++#endif
++
+ static int qcom_ec_probe(struct i2c_client *client)
+ {
+ 	struct device *dev = &client->dev;
+@@ -1239,7 +1391,7 @@ static int qcom_ec_probe(struct i2c_client *client)
+ 	init_completion(&ec->calib_abort);
+ 	ec->lut_cfg = device_get_match_data(dev);
+ 
+-	if (ec->lut_cfg &&
++	if (ec->lut_cfg && !ec->lut_cfg->fw_fan_curve &&
+ 	    (ec->lut_cfg->max_lut_entries < 2 ||
+ 	     ec->lut_cfg->max_lut_entries > EC_MAX_LUT_ENTRIES ||
+ 	     ec->lut_cfg->max_lut_entries > ec->lut_cfg->num_temps))
+@@ -1276,9 +1428,15 @@ static int qcom_ec_probe(struct i2c_client *client)
+ 		return ret;
+ 
+ 	ret = qcom_ec_thermal_capabilities(dev);
+-	if (ret < 0)
++	if (ret < 0 && !(ec->lut_cfg && ec->lut_cfg->default_fan_cnt))
+ 		return dev_err_probe(dev, ret, "Failed to read thermal capabilities\n");
+ 
++	if (!ec->thermal_cap.fan_cnt && ec->lut_cfg && ec->lut_cfg->default_fan_cnt) {
++		dev_info(dev, "No fan count from EC (%d), assuming %u fans\n",
++			 ret, ec->lut_cfg->default_fan_cnt);
++		ec->thermal_cap.fan_cnt = ec->lut_cfg->default_fan_cnt;
++	}
++
+ 	if (ec->lut_cfg && ec->lut_cfg->send_soc_tj) {
+ 		ret = qcom_ec_setup_soc_tj_zones(ec);
+ 		if (ret < 0)
+@@ -1297,6 +1455,9 @@ static int qcom_ec_probe(struct i2c_client *client)
+ 		return 0;
+ 	}
+ 
++	if (ec->lut_cfg && ec->lut_cfg->fw_fan_curve)
++		return qcom_ec_hwmon_register(ec);
++
+ 	ec->ec_cdev = devm_kcalloc(dev, ec->thermal_cap.fan_cnt, sizeof(*ec->ec_cdev), GFP_KERNEL);
+ 	if (!ec->ec_cdev)
+ 		return -ENOMEM;
+@@ -1339,7 +1500,7 @@ static void qcom_ec_remove(struct i2c_client *client)
+ {
+ 	struct qcom_ec *ec = i2c_get_clientdata(client);
+ 
+-	if (ec->lut_cfg && ec->thermal_cap.fan_cnt) {
++	if (qcom_ec_owns_fans(ec)) {
+ 		complete_all(&ec->calib_abort);
+ 		disable_work_sync(&ec->fan_calib_work);
+ 	}
+@@ -1347,7 +1508,7 @@ static void qcom_ec_remove(struct i2c_client *client)
+ 	if (ec->lut_cfg && ec->lut_cfg->send_soc_tj)
+ 		disable_delayed_work_sync(&ec->soc_tj_work);
+ 
+-	for (int i = 0; i < ec->thermal_cap.fan_cnt; i++) {
++	for (int i = 0; ec->ec_cdev && i < ec->thermal_cap.fan_cnt; i++) {
+ 		struct qcom_ec_cooling_dev *ec_cdev = &ec->ec_cdev[i];
+ 
+ 		mutex_lock(&ec->io_lock);
+@@ -1361,6 +1522,7 @@ static const struct of_device_id qcom_ec_of_match[] = {
+ 	{ .compatible = "qcom,purwa-iot-evk-ec", .data = &hamoa_iot_lut_config },
+ 	{ .compatible = "qcom,hamoa-crd-ec",     .data = &hamoa_crd_lut_config },
+ 	{ .compatible = "qcom,glymur-crd-ec",    .data = &glymur_lut_config    },
++	{ .compatible = "asus,vivobook-s15-ec",  .data = &asus_vivobook_s15_config },
+ 	{}
+ };
+ MODULE_DEVICE_TABLE(of, qcom_ec_of_match);

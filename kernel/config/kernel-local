@@ -1,0 +1,12 @@
+# ASUS Vivobook S 15 S5507QAD (x1e80100): local kernel config changes.
+# Copied to SOURCES/kernel-local by packaging/kernel/prepare-srpm.sh; Fedora's
+# kernel.spec merges it into every config variant (debug and non-debug).
+#
+# Video clock controller (qcom,x1e80100-videocc), needed by the iris decoder
+CONFIG_SM_VIDEOCC_8550=m
+#
+# hid-asus-ec (patch 0300): EC hotkeys and keyboard backlight of 0B05:4543
+CONFIG_HID_ASUS_EC=m
+#
+# Himax HM1092 IR camera sensor (patches 0200-0202)
+CONFIG_VIDEO_HM1092=m

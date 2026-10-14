@@ -1,0 +1,17 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+#
+# Called from 90-vivobook-s15-lpass-rpm.rules: disable runtime PM of the
+# LPASS macros on kernels >= 7.3 (see the comment in the rule).
+# Does nothing on 7.2.x.
+dev="$1"
+case "$dev" in
+	6aa0000.codec|6ac0000.codec|6ae0000.codec|6b00000.codec|6d44000.codec) ;;
+	*) exit 0 ;;
+esac
+kver=$(uname -r)
+first=$(printf '%s\n%s\n' "7.3" "${kver%%-*}" | sort -V | head -n 1)
+[ "$first" = "7.3" ] || exit 0
+ctl="/sys/devices/platform/soc@0/$dev/power/control"
+[ -w "$ctl" ] && echo on > "$ctl"
+exit 0

@@ -1,0 +1,7 @@
+[Unit]
+Description=Detect ath12k Wi-Fi stalls and recover (vivobook-s15-fedora)
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vivobook-wifi-watchdog

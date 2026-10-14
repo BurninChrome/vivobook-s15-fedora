@@ -1,0 +1,411 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Anvesh Jain P <anvesh.p@oss.qualcomm.com>
+Date: Tue, 28 Jul 2026 23:14:30 +0530
+Subject: [PATCH] platform: arm64: qcom-hamoa-ec: Add SoC junction temperature
+ reporting
+
+Add the EC command definitions and handler function for reporting the
+SoC junction temperature (Tj) to the EC.
+
+Discover the platform's thermal sensor to zone mapping via the
+qcom,tsens device tree property, average the junction temperatures
+across the mapped zones, and periodically report the result to the EC
+over SMBus using a delayed work item. Serialize this and the existing
+EC command sequences (firmware version read, thermal capability read,
+SCI event control, and the SCI IRQ handler) under a new io_lock mutex,
+since the delayed work item now runs concurrently with those paths.
+
+Re-arm the periodic report on resume and cancel it on suspend to avoid
+racing with the modern standby transition.
+---
+ drivers/platform/arm64/qcom-hamoa-ec.c | 257 +++++++++++++++++++++++--
+ 1 file changed, 242 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/platform/arm64/qcom-hamoa-ec.c b/drivers/platform/arm64/qcom-hamoa-ec.c
+index 4d2ad042a..cb16e4062 100644
+--- a/drivers/platform/arm64/qcom-hamoa-ec.c
++++ b/drivers/platform/arm64/qcom-hamoa-ec.c
+@@ -6,6 +6,8 @@
+ 
+ #include <linux/bitfield.h>
+ #include <linux/bits.h>
++#include <linux/delay.h>
++#include <linux/devm-helpers.h>
+ #include <linux/device.h>
+ #include <linux/dev_printk.h>
+ #include <linux/err.h>
+@@ -13,17 +15,25 @@
+ #include <linux/interrupt.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_platform.h>
++#include <linux/platform_device.h>
+ #include <linux/pm.h>
+ #include <linux/slab.h>
+ #include <linux/thermal.h>
+ 
+ #define EC_SCI_EVT_READ_CMD	0x05
+ #define EC_FW_VERSION_CMD	0x0e
++#define EC_SOC_TEMP_CMD	0x20
+ #define EC_MODERN_STANDBY_CMD	0x23
+ #define EC_FAN_DBG_CONTROL_CMD	0x30
+ #define EC_SCI_EVT_CONTROL_CMD	0x35
+ #define EC_THERMAL_CAP_CMD	0x42
+ 
++#define EC_SOC_TEMP_SOURCE_TJ			0x1
++#define EC_SOC_TEMP_SOURCE_TSKIN		0x2
++#define EC_SOC_TEMP_DATA_SIZE			2
++
+ #define EC_FW_VERSION_RESP_LEN	4
+ #define EC_THERMAL_CAP_RESP_LEN	3
+ #define EC_FAN_DEBUG_CMD_LEN	6
+@@ -32,14 +42,16 @@
+ #define EC_MODERN_STANDBY_ENTER	0x01
+ #define EC_MODERN_STANDBY_EXIT	0x00
+ 
+-#define EC_FAN_DEBUG_MODE_OFF   0
+-#define EC_FAN_DEBUG_MODE_ON    BIT(0)
+-#define EC_FAN_ON               BIT(1)
+-#define EC_FAN_DEBUG_TYPE_PWM   BIT(2)
++#define EC_FAN_DEBUG_MODE_OFF	0
++#define EC_FAN_DEBUG_MODE_ON	BIT(0)
++#define EC_FAN_ON		BIT(1)
++#define EC_FAN_DEBUG_TYPE_PWM	BIT(2)
+ #define EC_MAX_FAN_CNT		2
+ #define EC_FAN_NAME_SIZE	20
+ #define EC_FAN_MAX_PWM		255
+ 
++#define EC_SOC_TJ_TEMP_POLL_JIFFIES	msecs_to_jiffies(125)
++
+ enum qcom_ec_sci_events {
+ 	EC_FAN1_STATUS_CHANGE_EVT = 0x30,
+ 	EC_FAN2_STATUS_CHANGE_EVT,
+@@ -77,10 +89,14 @@ struct qcom_ec_cooling_dev {
+ };
+ 
+ struct qcom_ec {
++	struct i2c_client *client;
+ 	struct qcom_ec_cooling_dev *ec_cdev;
++	struct thermal_zone_device **soc_tj_zones;
++	struct delayed_work soc_tj_work;
++	struct mutex io_lock; /* serializes EC command sequences */
+ 	struct qcom_ec_thermal_cap thermal_cap;
+ 	struct qcom_ec_version version;
+-	struct i2c_client *client;
++	int num_soc_tj_zones;
+ };
+ 
+ static int qcom_ec_read(struct qcom_ec *ec, u8 cmd, u8 resp_len, u8 *resp)
+@@ -127,7 +143,9 @@ static int qcom_ec_read_fw_version(struct device *dev)
+ 	u8 resp[EC_FW_VERSION_RESP_LEN];
+ 	int ret;
+ 
++	mutex_lock(&ec->io_lock);
+ 	ret = qcom_ec_read(ec, EC_FW_VERSION_CMD, EC_FW_VERSION_RESP_LEN, resp);
++	mutex_unlock(&ec->io_lock);
+ 	if (ret < 0)
+ 		return ret;
+ 
+@@ -169,7 +187,9 @@ static int qcom_ec_thermal_capabilities(struct device *dev)
+ 	u8 resp[EC_THERMAL_CAP_RESP_LEN];
+ 	int ret;
+ 
++	mutex_lock(&ec->io_lock);
+ 	ret = qcom_ec_read(ec, EC_THERMAL_CAP_CMD, EC_THERMAL_CAP_RESP_LEN, resp);
++	mutex_unlock(&ec->io_lock);
+ 	if (ret < 0)
+ 		return ret;
+ 
+@@ -183,13 +203,165 @@ static int qcom_ec_thermal_capabilities(struct device *dev)
+ 	return 0;
+ }
+ 
++static struct thermal_zone_device *
++qcom_ec_sensor_to_zone(struct device_node *sensor_np, u32 sensor_id)
++{
++	struct device_node *tz_np __free(device_node) =
++		of_find_node_by_name(NULL, "thermal-zones");
++
++	if (!tz_np)
++		return ERR_PTR(-ENODEV);
++
++	for_each_available_child_of_node_scoped(tz_np, child) {
++		struct of_phandle_args args;
++
++		if (of_parse_phandle_with_args(child, "thermal-sensors",
++					       "#thermal-sensor-cells", 0, &args))
++			continue;
++
++		of_node_put(args.np);
++
++		if (args.np == sensor_np &&
++		    sensor_id == (args.args_count ? args.args[0] : 0))
++			return thermal_zone_get_zone_by_name(child->name);
++	}
++
++	return ERR_PTR(-ENODEV);
++}
++
++static int qcom_ec_setup_soc_tj_zones(struct qcom_ec *ec)
++{
++	struct device *dev = &ec->client->dev;
++	struct device_node *np = dev->of_node;
++	int nproviders, total, i;
++
++	nproviders = of_property_count_elems_of_size(np, "qcom,tsens",
++						     2 * sizeof(u32));
++	if (nproviders <= 0)
++		return 0;
++
++	total = 0;
++	for (i = 0; i < nproviders; i++) {
++		struct of_phandle_args args;
++
++		if (of_parse_phandle_with_fixed_args(np, "qcom,tsens", 1, i, &args))
++			return -EINVAL;
++
++		of_node_put(args.np);
++		total += args.args[0];
++	}
++
++	ec->soc_tj_zones = devm_kcalloc(dev, total, sizeof(*ec->soc_tj_zones),
++					GFP_KERNEL);
++	if (!ec->soc_tj_zones)
++		return -ENOMEM;
++
++	for (i = 0; i < nproviders; i++) {
++		struct of_phandle_args args;
++		struct platform_device *sensor_pdev;
++		u32 id;
++
++		if (of_parse_phandle_with_fixed_args(np, "qcom,tsens", 1, i, &args))
++			return -EINVAL;
++
++		sensor_pdev = of_find_device_by_node(args.np);
++		if (!sensor_pdev) {
++			of_node_put(args.np);
++			return -EPROBE_DEFER;
++		}
++
++		/* Ensure we unbind before the sensor frees its zones */
++		if (!device_link_add(dev, &sensor_pdev->dev, DL_FLAG_AUTOREMOVE_CONSUMER)) {
++			dev_err(dev, "Failed to link to sensor %pOF\n", args.np);
++			put_device(&sensor_pdev->dev);
++			of_node_put(args.np);
++			return -ENODEV;
++		}
++		put_device(&sensor_pdev->dev);
++
++		for (id = 0; id < args.args[0]; id++) {
++			struct thermal_zone_device *tz;
++
++			tz = qcom_ec_sensor_to_zone(args.np, id);
++			if (IS_ERR(tz))
++				continue;
++
++			ec->soc_tj_zones[ec->num_soc_tj_zones++] = tz;
++		}
++		of_node_put(args.np);
++	}
++
++	return 0;
++}
++
++/*
++ * SoC to EC Temperature command:
++ *
++ * Command Payload:
++ * -------------------------------------------------------------------------------
++ * | Offset	| Name		| Description					|
++ * -------------------------------------------------------------------------------
++ * | 0x00	| Command = 0x20| SoC to EC Temperature command			|
++ * -------------------------------------------------------------------------------
++ * | 0x01	| Temp Source	| 0x1 : CPU junction temperature (SoC Tj)	|
++ * |		|		| 0x2 : Skin Temperature (Tskin)		|
++ * -------------------------------------------------------------------------------
++ * | 0x02	| Byte count = 2| Number of data bytes for temperature value	|
++ * -------------------------------------------------------------------------------
++ * | 0x03 (LSB)| Temperature	| Temperature value in 0.1 deg C units		|
++ * | 0x04	|		| (e.g. 651 => 65.1 deg C)			|
++ * -------------------------------------------------------------------------------
++ *
++ */
++
++static int qcom_ec_send_soc_tj_temp(struct qcom_ec *ec)
++{
++	int total = 0;
++	int valid = 0;
++	int ret = 0;
++	u16 temp;
++	u8 request[4];
++
++	for (int i = 0; i < ec->num_soc_tj_zones; i++) {
++		int zone_temp;
++
++		if (thermal_zone_get_temp(ec->soc_tj_zones[i], &zone_temp))
++			continue;
++
++		total += zone_temp;
++		valid++;
++	}
++
++	if (!valid)
++		return 0;
++
++	/* Convert millidegrees Celsius to 0.1 deg C units as required by EC */
++	temp = clamp(total / valid / 100, 0, (int)U16_MAX);
++	request[0] = EC_SOC_TEMP_SOURCE_TJ;
++	request[1] = EC_SOC_TEMP_DATA_SIZE;
++	request[2] = temp & 0xff;
++	request[3] = (temp >> 8) & 0xff;
++
++	mutex_lock(&ec->io_lock);
++	ret = i2c_smbus_write_i2c_block_data(ec->client, EC_SOC_TEMP_CMD,
++					     sizeof(request), request);
++	mutex_unlock(&ec->io_lock);
++	if (ret < 0)
++		dev_err_ratelimited(&ec->client->dev,
++				    "Failed to send SoC Tj temperature: %d\n", ret);
++
++	return ret;
++}
++
+ static irqreturn_t qcom_ec_irq(int irq, void *data)
+ {
+ 	struct qcom_ec *ec = data;
+ 	struct device *dev = &ec->client->dev;
+ 	int val;
+ 
++	mutex_lock(&ec->io_lock);
+ 	val = i2c_smbus_read_byte_data(ec->client, EC_SCI_EVT_READ_CMD);
++	mutex_unlock(&ec->io_lock);
+ 	if (val < 0) {
+ 		dev_err_ratelimited(dev, "Failed to read EC SCI Event: %d\n", val);
+ 		return IRQ_HANDLED;
+@@ -237,8 +409,24 @@ static irqreturn_t qcom_ec_irq(int irq, void *data)
+ static int qcom_ec_sci_evt_control(struct device *dev, bool enable)
+ {
+ 	struct i2c_client *client = to_i2c_client(dev);
++	struct qcom_ec *ec = i2c_get_clientdata(client);
++	int ret;
++
++	mutex_lock(&ec->io_lock);
++	ret = i2c_smbus_write_byte_data(client, EC_SCI_EVT_CONTROL_CMD, enable ? 1 : 0);
++	mutex_unlock(&ec->io_lock);
+ 
+-	return i2c_smbus_write_byte_data(client, EC_SCI_EVT_CONTROL_CMD, enable ? 1 : 0);
++	return ret;
++}
++
++static void qcom_ec_sci_evt_disable(void *data)
++{
++	struct device *dev = data;
++	int ret;
++
++	ret = qcom_ec_sci_evt_control(dev, false);
++	if (ret < 0)
++		dev_err(dev, "Failed to disable SCI events: %d\n", ret);
+ }
+ 
+ static int qcom_ec_fan_get_max_state(struct thermal_cooling_device *cdev, unsigned long *state)
+@@ -328,20 +516,48 @@ static const struct thermal_cooling_device_ops qcom_ec_thermal_ops = {
+ 	.set_cur_state = qcom_ec_fan_set_cur_state,
+ };
+ 
++static void qcom_ec_soc_tj_work_fn(struct work_struct *work)
++{
++	struct qcom_ec *ec = container_of(work, struct qcom_ec, soc_tj_work.work);
++
++	qcom_ec_send_soc_tj_temp(ec);
++
++	queue_delayed_work(system_percpu_wq, &ec->soc_tj_work, EC_SOC_TJ_TEMP_POLL_JIFFIES);
++}
++
+ static int qcom_ec_resume(struct device *dev)
+ {
+ 	struct i2c_client *client = to_i2c_client(dev);
++	struct qcom_ec *ec = i2c_get_clientdata(client);
++	int ret;
++
++	mutex_lock(&ec->io_lock);
++	ret = i2c_smbus_write_byte_data(client, EC_MODERN_STANDBY_CMD,
++					EC_MODERN_STANDBY_EXIT);
++	mutex_unlock(&ec->io_lock);
++	if (ret)
++		return ret;
++
++	enable_delayed_work(&ec->soc_tj_work);
++	queue_delayed_work(system_percpu_wq, &ec->soc_tj_work, EC_SOC_TJ_TEMP_POLL_JIFFIES);
+ 
+-	return i2c_smbus_write_byte_data(client, EC_MODERN_STANDBY_CMD,
+-					 EC_MODERN_STANDBY_EXIT);
++	return 0;
+ }
+ 
+ static int qcom_ec_suspend(struct device *dev)
+ {
+ 	struct i2c_client *client = to_i2c_client(dev);
++	struct qcom_ec *ec = i2c_get_clientdata(client);
++	int ret;
+ 
+-	return i2c_smbus_write_byte_data(client, EC_MODERN_STANDBY_CMD,
+-					 EC_MODERN_STANDBY_ENTER);
++	disable_delayed_work_sync(&ec->soc_tj_work);
++
++	mutex_lock(&ec->io_lock);
++	ret = i2c_smbus_write_byte_data(client, EC_MODERN_STANDBY_CMD,
++					EC_MODERN_STANDBY_ENTER);
++	mutex_unlock(&ec->io_lock);
++
++	return ret;
+ }
+ 
+ static int qcom_ec_probe(struct i2c_client *client)
+@@ -356,6 +572,7 @@ static int qcom_ec_probe(struct i2c_client *client)
+ 		return -ENOMEM;
+ 
+ 	ec->client = client;
++	mutex_init(&ec->io_lock);
+ 
+ 	ret = devm_request_threaded_irq(dev, client->irq, NULL, qcom_ec_irq,
+ 					IRQF_ONESHOT, "qcom_ec", ec);
+@@ -372,10 +589,24 @@ static int qcom_ec_probe(struct i2c_client *client)
+ 	if (ret < 0)
+ 		return dev_err_probe(dev, ret, "Failed to enable SCI events\n");
+ 
++	ret = devm_add_action_or_reset(dev, qcom_ec_sci_evt_disable, dev);
++	if (ret)
++		return ret;
++
+ 	ret = qcom_ec_thermal_capabilities(dev);
+ 	if (ret < 0)
+ 		return dev_err_probe(dev, ret, "Failed to read thermal capabilities\n");
+ 
++	ret = qcom_ec_setup_soc_tj_zones(ec);
++	if (ret < 0)
++		return dev_err_probe(dev, ret, "Failed to setup SoC Tj thermal zones\n");
++
++	ret = devm_delayed_work_autocancel(dev, &ec->soc_tj_work, qcom_ec_soc_tj_work_fn);
++	if (ret)
++		return ret;
++
++	queue_delayed_work(system_percpu_wq, &ec->soc_tj_work, EC_SOC_TJ_TEMP_POLL_JIFFIES);
++
+ 	if (ec->thermal_cap.fan_cnt == 0) {
+ 		dev_warn(dev, FW_BUG "Failed to get fan count, firmware update required\n");
+ 		return 0;
+@@ -407,12 +638,8 @@ static int qcom_ec_probe(struct i2c_client *client)
+ static void qcom_ec_remove(struct i2c_client *client)
+ {
+ 	struct qcom_ec *ec = i2c_get_clientdata(client);
+-	struct device *dev = &client->dev;
+-	int ret;
+ 
+-	ret = qcom_ec_sci_evt_control(dev, false);
+-	if (ret < 0)
+-		dev_err(dev, "Failed to disable SCI events: %d\n", ret);
++	disable_delayed_work_sync(&ec->soc_tj_work);
+ 
+ 	for (int i = 0; i < ec->thermal_cap.fan_cnt; i++) {
+ 		struct qcom_ec_cooling_dev *ec_cdev = &ec->ec_cdev[i];

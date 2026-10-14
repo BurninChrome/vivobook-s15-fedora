@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# HID-BPF for the ASUS Vivobook S 15 S5507 keyboard (I2C HID 0B05:4543).
+# Program: 0010-ASUS__Vivobook_S15_S5507_kbd.bpf.o from
+# https://github.com/icecream95/udev-hid-bpf (build with build-bpf.sh).
+# The HID_BPF_V_ prefix does not collide with HID_BPF_S_/HID_BPF_T_ of Fedora's packages.
+hid-bpf:hid:b0018g0001v00000B05p00004543
+  HID_BPF_V_000=0010-ASUS__Vivobook_S15_S5507_kbd.bpf.o
+  .HID_BPF=1

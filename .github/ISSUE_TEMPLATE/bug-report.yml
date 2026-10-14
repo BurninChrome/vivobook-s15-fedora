@@ -1,0 +1,41 @@
+name: Bug report
+description: Something that should work does not
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Unexpected reboots or fans at full speed?** Say whether the
+        `qcom_hamoa_ec` module was loaded (`lsmod | grep hamoa`) and attach
+        `journalctl -b -1 -k | grep -i -E 'hamoa|tsens|thermal'`.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [audio, microphones, camera, IR camera / Howdy, keyboard, EC / fans, suspend, Wi-Fi, display output, boot / DTB hook, packaging, other]
+    validations: { required: true }
+  - type: input
+    id: model
+    attributes:
+      label: Model and BIOS
+      placeholder: "S5507QAD, S5507QAD.367"
+    validations: { required: true }
+  - type: input
+    id: kernel
+    attributes:
+      label: Kernel (uname -r)
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, what did you expect
+    validations: { required: true }
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines (redacted)
+      render: text

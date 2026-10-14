@@ -1,0 +1,5 @@
+# Fedora kernel the patch series is built on.
+FEDORA_NVR=kernel-7.3.0-0.rc6.261009gaf32da41b032.55.fc46
+FEDORA_DISTGIT_COMMIT=6b205f963f461688bc7b2b5c8f5e44ddd1fa0cd4
+UPSTREAM_COMMIT=af32da41b032
+VIVOBOOK_RELEASE=3

@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Anvesh Jain P <anvesh.p@oss.qualcomm.com>
+Date: Tue, 28 Jul 2026 23:14:34 +0530
+Subject: [PATCH] platform: arm64: qcom-hamoa-ec: Retry I2C transfers on NACK
+
+The EC firmware NACKs the bus instead of clock-stretching while it is
+busy servicing internal work (e.g. right after boot, when it is also
+emitting a burst of SCI events). A transfer issued in that window fails
+with -ENXIO even though the EC is otherwise healthy.
+
+This isn't visible with the smbus-only command set used previously; it
+surfaced while stress-testing the new fan LUT command on Hamoa, which
+issues raw i2c_transfer() calls more aggressively and is thus more
+likely to land in the NACK window right after boot or during an SCI
+event burst.
+
+Retry qcom_ec_write() and qcom_ec_read() a bounded number of times with
+a short delay when the EC NACKs the transfer, before giving up.
+
+Signed-off-by: Anvesh Jain P <anvesh.p@oss.qualcomm.com>
+---
+ drivers/platform/arm64/qcom-hamoa-ec.c | 40 ++++++++++++++++++++++----
+ 1 file changed, 34 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/platform/arm64/qcom-hamoa-ec.c b/drivers/platform/arm64/qcom-hamoa-ec.c
+index a420a180a..122ae27c2 100644
+--- a/drivers/platform/arm64/qcom-hamoa-ec.c
++++ b/drivers/platform/arm64/qcom-hamoa-ec.c
+@@ -64,6 +64,18 @@
+ 
+ #define EC_SOC_TJ_TEMP_POLL_JIFFIES	msecs_to_jiffies(125)
+ 
++/*
++ * The EC firmware NACKs the bus instead of clock-stretching while it is
++ * busy servicing internal work (e.g. right after boot, when it is also
++ * emitting a burst of SCI events). This NACK only occurs at the address
++ * phase, so retrying the whole transfer is safe. Attempt the transfer a
++ * bounded number of times on NACK before giving up; a genuinely missing
++ * or unpowered device pays a worst-case added latency of
++ * (EC_I2C_NACK_MAX_ATTEMPTS - 1) * EC_I2C_NACK_RETRY_DELAY_MS.
++ */
++#define EC_I2C_NACK_MAX_ATTEMPTS	5
++#define EC_I2C_NACK_RETRY_DELAY_MS	20
++
+ enum qcom_ec_sci_events {
+ 	EC_FAN1_STATUS_CHANGE_EVT = 0x30,
+ 	EC_FAN2_STATUS_CHANGE_EVT,
+@@ -233,11 +245,20 @@ static int qcom_ec_write(struct qcom_ec *ec, u8 cmd, const u8 *data, size_t len)
+ 	msg.buf[0] = cmd;
+ 	memcpy(&msg.buf[1], data, len);
+ 
+-	ret = i2c_transfer(ec->client->adapter, &msg, 1);
++	for (int i = 0; i < EC_I2C_NACK_MAX_ATTEMPTS; i++) {
++		ret = i2c_transfer(ec->client->adapter, &msg, 1);
++		ret = ret == 1 ? 0 : (ret < 0 ? ret : -EIO);
++		if (ret != -ENXIO || i == EC_I2C_NACK_MAX_ATTEMPTS - 1)
++			break;
++
++		dev_dbg(&ec->client->dev,
++			"EC busy (NACK), retrying write of cmd 0x%02x\n", cmd);
++		msleep(EC_I2C_NACK_RETRY_DELAY_MS);
++	}
+ 
+ 	kfree(msg.buf);
+ 
+-	return ret == 1 ? 0 : (ret < 0 ? ret : -EIO);
++	return ret;
+ }
+ 
+ static int qcom_ec_read(struct qcom_ec *ec, u8 cmd, const u8 *subcmd,
+@@ -281,11 +302,18 @@ static int qcom_ec_read(struct qcom_ec *ec, u8 cmd, const u8 *subcmd,
+ 	msgs[1].len   = resp_len;
+ 	msgs[1].buf   = read_buf;
+ 
+-	ret = i2c_transfer(client->adapter, msgs, 2);
+-	if (ret != 2) {
+-		ret = ret < 0 ? ret : -EIO;
+-		goto out;
++	for (int i = 0; i < EC_I2C_NACK_MAX_ATTEMPTS; i++) {
++		ret = i2c_transfer(client->adapter, msgs, 2);
++		ret = ret == 2 ? 0 : (ret < 0 ? ret : -EIO);
++		if (ret != -ENXIO || i == EC_I2C_NACK_MAX_ATTEMPTS - 1)
++			break;
++
++		dev_dbg(&client->dev,
++			"EC busy (NACK), retrying read of cmd 0x%02x\n", cmd);
++		msleep(EC_I2C_NACK_RETRY_DELAY_MS);
+ 	}
++	if (ret)
++		goto out;
+ 
+ 	if (read_buf[0] == 0 || read_buf[0] == 0xff) {
+ 		ret = -EOPNOTSUPP;

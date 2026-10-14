@@ -1,0 +1,497 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kacper Goc <11682528+BurninChrome@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 10:54:09 +0200
+Subject: [PATCH] HID: asus-ec: add ASUS EC hotkeys and keyboard backlight
+ driver (Vivobook S15)
+
+On Snapdragon based ASUS laptops the keyboard is an I2C HID device which
+also carries vendor report 0x5A to and from the embedded controller. The
+EC reports the Fn hotkeys through it and accepts feature reports for the
+keyboard backlight (5A BA C5 C4 <0..3>) and Fn-lock (5A D0 4E <0|1>).
+
+This driver binds to the keyboard instead of hid-generic, keeps the
+regular hidinput and hidraw interfaces and adds:
+- asus::kbd_backlight LED (0..3) with brightness_hw_changed, so that
+  UPower/GNOME show the slider and the OSD for Fn+F4,
+- Fn+Esc toggling the EC Fn-lock (also /sys/.../fn_lock),
+- Fn hotkeys: brightness, mic mute, emoji, MyASUS, fan profile, etc.,
+- backlight off on suspend, EC re-init and state restore on resume.
+
+Based on the v1 driver by Alexandru Marc Serdeliuc for the Zenbook A14
+(0B05:0220), "[PATCH] HID: asus: add new Asus EC hid device for keyboard
+backlight and FN HotKeys", linux-input, 2025-12-21 (not merged; the
+maintainer asked to fold it into hid-asus in v2, not posted as of
+2026-10-09), and on the HID-BPF program by Icecream95 for the Vivobook S15
+(github.com/icecream95/udev-hid-bpf, commit 519dadad5420). The protocol
+of 0B05:4543 matches the A14 one (same report ID, commands and event
+codes); the extra init command 5A 05 20 31 00 08 comes from the BPF
+program.
+
+Changes compared to v1: Vivobook S15 ID, HID_CONNECT_DEFAULT instead of
+report type constants (v1 lost hidraw), DMA safe buffer, work queues for
+EC writes from raw_event, brightness_set_blocking, real key release
+from the EC release event, no global state, devm resources.
+
+Not for upstream as is. Local patch of the vivobook-s15-fedora project,
+requires CONFIG_HID_ASUS_EC=m. Remove the HID-BPF program for this keyboard
+when this driver is in use, otherwise Fn-lock and the backlight key are
+handled twice.
+
+Assisted-by: LLM (Claude Opus 5.5)
+---
+ drivers/hid/Kconfig       |  17 ++
+ drivers/hid/Makefile      |   1 +
+ drivers/hid/hid-asus-ec.c | 404 ++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 422 insertions(+)
+ create mode 100644 drivers/hid/hid-asus-ec.c
+
+diff --git a/drivers/hid/Kconfig b/drivers/hid/Kconfig
+index c43e82442..91a286626 100644
+--- a/drivers/hid/Kconfig
++++ b/drivers/hid/Kconfig
+@@ -200,6 +200,23 @@ config HID_ASUS
+ 	- GL553V series
+ 	- GL753V series
+ 
++config HID_ASUS_EC
++	tristate "ASUS EC hotkeys and keyboard backlight on Snapdragon laptops"
++	depends on I2C_HID_CORE
++	depends on LEDS_CLASS
++	help
++	  Support for the embedded controller of ASUS laptops based on
++	  Qualcomm Snapdragon, which is reached through vendor reports of
++	  the I2C HID keyboard. Provides the Fn hotkeys, Fn-lock and the
++	  keyboard backlight as the asus::kbd_backlight LED.
++
++	  Supported devices:
++	  - ASUS Zenbook A14 (UX3407QA)
++	  - ASUS Vivobook S15 (S5507QA)
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called hid-asus-ec.
++
+ config HID_AUREAL
+ 	tristate "Aureal"
+ 	help
+diff --git a/drivers/hid/Makefile b/drivers/hid/Makefile
+index 48a863b24..9ca0666e1 100644
+--- a/drivers/hid/Makefile
++++ b/drivers/hid/Makefile
+@@ -34,6 +34,7 @@ obj-$(CONFIG_HID_APPLETB_BL)	+= hid-appletb-bl.o
+ obj-$(CONFIG_HID_APPLETB_KBD)	+= hid-appletb-kbd.o
+ obj-$(CONFIG_HID_CREATIVE_SB0540)	+= hid-creative-sb0540.o
+ obj-$(CONFIG_HID_ASUS)		+= hid-asus.o
++obj-$(CONFIG_HID_ASUS_EC)	+= hid-asus-ec.o
+ obj-$(CONFIG_HID_AUREAL)	+= hid-aureal.o
+ obj-$(CONFIG_HID_BELKIN)	+= hid-belkin.o
+ obj-$(CONFIG_HID_BETOP_FF)	+= hid-betopff.o
+diff --git a/drivers/hid/hid-asus-ec.c b/drivers/hid/hid-asus-ec.c
+new file mode 100644
+index 000000000..ce0657497
+--- /dev/null
++++ b/drivers/hid/hid-asus-ec.c
+@@ -0,0 +1,404 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * HID driver for the ASUS embedded controller on Snapdragon laptops
++ *
++ * On ASUS Zenbook A14 (UX3407QA, 0B05:0220) and Vivobook S15 S5507QA
++ * (0B05:4543) the keyboard is an I2C HID device which also carries a
++ * vendor report (ID 0x5A) to and from the EC. The EC reports Fn hotkeys
++ * through it and accepts feature reports for keyboard backlight and
++ * Fn-lock control.
++ *
++ * Based on "HID: asus: add new Asus EC hid device for keyboard backlight
++ * and FN HotKeys" by Alexandru Marc Serdeliuc (linux-input, 2025-12-21)
++ * and on the HID-BPF program for the Vivobook S15 by Icecream95
++ * (https://github.com/icecream95/udev-hid-bpf).
++ *
++ * Copyright (c) 2025 Alexandru Marc Serdeliuc <serdeliuk@yahoo.com>
++ * Copyright (c) 2024 Icecream95 <the.real.icecream95@gmail.com>
++ */
++
++#include <linux/hid.h>
++#include <linux/input.h>
++#include <linux/leds.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/slab.h>
++#include <linux/workqueue.h>
++
++#define ASUS_EC_VENDOR_ID		0x0b05
++#define ASUS_EC_PRODUCT_ZENBOOK_A14	0x0220
++#define ASUS_EC_PRODUCT_VIVOBOOK_S15	0x4543
++
++#define ASUS_EC_REPORT_ID		0x5a
++#define ASUS_EC_REPORT_SIZE		64
++#define ASUS_EC_MAX_BACKLIGHT		3
++
++/* Hotkey codes in byte 1 of input report 0x5A */
++#define ASUS_EC_EVT_RELEASE		0x00
++#define ASUS_EC_EVT_BRIGHTNESS_DOWN	0x10
++#define ASUS_EC_EVT_BRIGHTNESS_UP	0x20
++#define ASUS_EC_EVT_FN_LOCK		0x4e
++#define ASUS_EC_EVT_TOUCHPAD_TOGGLE	0x6b
++#define ASUS_EC_EVT_MIC_MUTE		0x7c
++#define ASUS_EC_EVT_EMOJI		0x7e
++#define ASUS_EC_EVT_CAMERA_TOGGLE	0x85
++#define ASUS_EC_EVT_MYASUS		0x86
++#define ASUS_EC_EVT_FAN_PROFILE		0x9d
++#define ASUS_EC_EVT_KBD_BACKLIGHT	0xc7
++#define ASUS_EC_EVT_MIC_MODE		0xcb
++
++struct asus_ec_key {
++	u8 code;
++	unsigned int key;
++};
++
++static const struct asus_ec_key asus_ec_keymap[] = {
++	{ ASUS_EC_EVT_BRIGHTNESS_DOWN,	KEY_BRIGHTNESSDOWN },
++	{ ASUS_EC_EVT_BRIGHTNESS_UP,	KEY_BRIGHTNESSUP },
++	{ ASUS_EC_EVT_TOUCHPAD_TOGGLE,	KEY_TOUCHPAD_TOGGLE },
++	{ ASUS_EC_EVT_MIC_MUTE,		KEY_MICMUTE },
++	{ ASUS_EC_EVT_EMOJI,		KEY_EMOJI_PICKER },
++	{ ASUS_EC_EVT_CAMERA_TOGGLE,	KEY_CAMERA_ACCESS_TOGGLE },
++	{ ASUS_EC_EVT_MYASUS,		KEY_PROG1 },
++	{ ASUS_EC_EVT_FAN_PROFILE,	KEY_PERFORMANCE },
++	{ ASUS_EC_EVT_MIC_MODE,		KEY_PROG2 },
++};
++
++struct asus_ec {
++	struct hid_device *hdev;
++	struct input_dev *input;
++	struct led_classdev led;
++	struct work_struct fn_lock_work;
++	struct work_struct backlight_work;
++	struct mutex lock;		/* protects buf and EC state below */
++	u8 *buf;
++	u8 brightness;
++	bool fn_lock;
++	unsigned int pressed_key;	/* key waiting for the release event */
++};
++
++static int asus_ec_send(struct asus_ec *ec, const u8 *cmd, size_t len)
++{
++	int ret;
++
++	lockdep_assert_held(&ec->lock);
++
++	memset(ec->buf, 0, ASUS_EC_REPORT_SIZE);
++	memcpy(ec->buf, cmd, len);
++	ret = hid_hw_raw_request(ec->hdev, ASUS_EC_REPORT_ID, ec->buf,
++				 ASUS_EC_REPORT_SIZE, HID_FEATURE_REPORT,
++				 HID_REQ_SET_REPORT);
++	if (ret < 0)
++		hid_warn(ec->hdev, "EC command %02x %02x failed: %d\n",
++			 cmd[1], cmd[2], ret);
++	return ret < 0 ? ret : 0;
++}
++
++static int asus_ec_set_brightness_locked(struct asus_ec *ec, u8 level)
++{
++	const u8 cmd[] = { ASUS_EC_REPORT_ID, 0xba, 0xc5, 0xc4, level };
++	int ret;
++
++	ret = asus_ec_send(ec, cmd, sizeof(cmd));
++	if (!ret)
++		ec->brightness = level;
++	return ret;
++}
++
++static int asus_ec_set_fn_lock_locked(struct asus_ec *ec, bool on)
++{
++	const u8 cmd[] = { ASUS_EC_REPORT_ID, 0xd0, 0x4e, on };
++	int ret;
++
++	ret = asus_ec_send(ec, cmd, sizeof(cmd));
++	if (!ret)
++		ec->fn_lock = on;
++	return ret;
++}
++
++/* Enable hotkey reporting and backlight control, restore saved state */
++static int asus_ec_init_hw(struct asus_ec *ec)
++{
++	static const u8 init1[] = { ASUS_EC_REPORT_ID, 0x05, 0x20, 0x31, 0x00, 0x08 };
++	static const u8 init2[] = { ASUS_EC_REPORT_ID, 0xd0, 0x8f, 0x01 };
++	int ret;
++
++	mutex_lock(&ec->lock);
++	ret = asus_ec_send(ec, init1, sizeof(init1));
++	if (!ret)
++		ret = asus_ec_send(ec, init2, sizeof(init2));
++	if (!ret)
++		ret = asus_ec_set_brightness_locked(ec, ec->brightness);
++	if (!ret)
++		ret = asus_ec_set_fn_lock_locked(ec, ec->fn_lock);
++	mutex_unlock(&ec->lock);
++
++	return ret;
++}
++
++static int asus_ec_led_set(struct led_classdev *led, enum led_brightness value)
++{
++	struct asus_ec *ec = container_of(led, struct asus_ec, led);
++	int ret;
++
++	mutex_lock(&ec->lock);
++	ret = asus_ec_set_brightness_locked(ec, min_t(u8, value, ASUS_EC_MAX_BACKLIGHT));
++	mutex_unlock(&ec->lock);
++
++	return ret;
++}
++
++static enum led_brightness asus_ec_led_get(struct led_classdev *led)
++{
++	struct asus_ec *ec = container_of(led, struct asus_ec, led);
++
++	return ec->brightness;
++}
++
++static void asus_ec_backlight_work(struct work_struct *work)
++{
++	struct asus_ec *ec = container_of(work, struct asus_ec, backlight_work);
++	u8 level;
++
++	mutex_lock(&ec->lock);
++	level = (ec->brightness + 1) % (ASUS_EC_MAX_BACKLIGHT + 1);
++	asus_ec_set_brightness_locked(ec, level);
++	level = ec->brightness;
++	mutex_unlock(&ec->lock);
++
++	/* Lets UPower/GNOME show the keyboard backlight OSD */
++	led_classdev_notify_brightness_hw_changed(&ec->led, level);
++}
++
++static void asus_ec_fn_lock_work(struct work_struct *work)
++{
++	struct asus_ec *ec = container_of(work, struct asus_ec, fn_lock_work);
++
++	mutex_lock(&ec->lock);
++	asus_ec_set_fn_lock_locked(ec, !ec->fn_lock);
++	mutex_unlock(&ec->lock);
++}
++
++static ssize_t fn_lock_show(struct device *dev, struct device_attribute *attr,
++			    char *buf)
++{
++	struct asus_ec *ec = hid_get_drvdata(to_hid_device(dev));
++
++	return sysfs_emit(buf, "%d\n", ec->fn_lock);
++}
++
++static ssize_t fn_lock_store(struct device *dev, struct device_attribute *attr,
++			     const char *buf, size_t count)
++{
++	struct asus_ec *ec = hid_get_drvdata(to_hid_device(dev));
++	bool on;
++	int ret;
++
++	ret = kstrtobool(buf, &on);
++	if (ret)
++		return ret;
++
++	mutex_lock(&ec->lock);
++	ret = asus_ec_set_fn_lock_locked(ec, on);
++	mutex_unlock(&ec->lock);
++
++	return ret ?: count;
++}
++static DEVICE_ATTR_RW(fn_lock);
++
++static struct attribute *asus_ec_attrs[] = {
++	&dev_attr_fn_lock.attr,
++	NULL
++};
++ATTRIBUTE_GROUPS(asus_ec);
++
++static void asus_ec_report_key(struct asus_ec *ec, unsigned int key, int value)
++{
++	input_report_key(ec->input, key, value);
++	input_sync(ec->input);
++}
++
++static int asus_ec_raw_event(struct hid_device *hdev, struct hid_report *report,
++			     u8 *data, int size)
++{
++	struct asus_ec *ec = hid_get_drvdata(hdev);
++	u8 code;
++	int i;
++
++	if (report->id != ASUS_EC_REPORT_ID || size < 2 || data[0] != ASUS_EC_REPORT_ID)
++		return 0;
++
++	code = data[1];
++
++	switch (code) {
++	case ASUS_EC_EVT_RELEASE:
++		if (ec->pressed_key) {
++			asus_ec_report_key(ec, ec->pressed_key, 0);
++			ec->pressed_key = 0;
++		}
++		return 1;
++	case ASUS_EC_EVT_FN_LOCK:
++		schedule_work(&ec->fn_lock_work);
++		return 1;
++	case ASUS_EC_EVT_KBD_BACKLIGHT:
++		schedule_work(&ec->backlight_work);
++		return 1;
++	}
++
++	for (i = 0; i < ARRAY_SIZE(asus_ec_keymap); i++) {
++		if (asus_ec_keymap[i].code != code)
++			continue;
++		if (ec->pressed_key && ec->pressed_key != asus_ec_keymap[i].key)
++			asus_ec_report_key(ec, ec->pressed_key, 0);
++		ec->pressed_key = asus_ec_keymap[i].key;
++		asus_ec_report_key(ec, ec->pressed_key, 1);
++		return 1;
++	}
++
++	hid_dbg(hdev, "unhandled EC event 0x%02x\n", code);
++	return 0;
++}
++
++static int asus_ec_probe(struct hid_device *hdev, const struct hid_device_id *id)
++{
++	struct asus_ec *ec;
++	int i, ret;
++
++	ec = devm_kzalloc(&hdev->dev, sizeof(*ec), GFP_KERNEL);
++	if (!ec)
++		return -ENOMEM;
++
++	ec->buf = devm_kzalloc(&hdev->dev, ASUS_EC_REPORT_SIZE, GFP_KERNEL);
++	if (!ec->buf)
++		return -ENOMEM;
++
++	ec->hdev = hdev;
++	ec->brightness = 1;
++	mutex_init(&ec->lock);
++	INIT_WORK(&ec->fn_lock_work, asus_ec_fn_lock_work);
++	INIT_WORK(&ec->backlight_work, asus_ec_backlight_work);
++	hid_set_drvdata(hdev, ec);
++
++	ret = hid_parse(hdev);
++	if (ret)
++		return ret;
++
++	/* Keep hidinput for the regular keys and hidraw for userspace tools */
++	ret = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
++	if (ret)
++		return ret;
++
++	ec->input = devm_input_allocate_device(&hdev->dev);
++	if (!ec->input) {
++		ret = -ENOMEM;
++		goto err_stop;
++	}
++
++	ec->input->name = "ASUS EC hotkeys";
++	ec->input->phys = "asus-ec/input0";
++	ec->input->id.bustype = hdev->bus;
++	ec->input->id.vendor = hdev->vendor;
++	ec->input->id.product = hdev->product;
++	ec->input->id.version = hdev->version;
++	ec->input->dev.parent = &hdev->dev;
++	for (i = 0; i < ARRAY_SIZE(asus_ec_keymap); i++)
++		input_set_capability(ec->input, EV_KEY, asus_ec_keymap[i].key);
++
++	ret = input_register_device(ec->input);
++	if (ret)
++		goto err_stop;
++
++	ret = hid_hw_open(hdev);
++	if (ret)
++		goto err_stop;
++
++	ret = asus_ec_init_hw(ec);
++	if (ret)
++		hid_warn(hdev, "EC init failed: %d\n", ret);
++
++	ec->led.name = "asus::kbd_backlight";
++	ec->led.max_brightness = ASUS_EC_MAX_BACKLIGHT;
++	ec->led.brightness = ec->brightness;
++	ec->led.brightness_set_blocking = asus_ec_led_set;
++	ec->led.brightness_get = asus_ec_led_get;
++	ec->led.flags = LED_BRIGHT_HW_CHANGED;
++	ret = devm_led_classdev_register(&hdev->dev, &ec->led);
++	if (ret)
++		goto err_close;
++
++	return 0;
++
++err_close:
++	hid_hw_close(hdev);
++err_stop:
++	hid_hw_stop(hdev);
++	return ret;
++}
++
++static void asus_ec_remove(struct hid_device *hdev)
++{
++	struct asus_ec *ec = hid_get_drvdata(hdev);
++
++	devm_led_classdev_unregister(&hdev->dev, &ec->led);
++	cancel_work_sync(&ec->fn_lock_work);
++	cancel_work_sync(&ec->backlight_work);
++	hid_hw_close(hdev);
++	hid_hw_stop(hdev);
++}
++
++static int asus_ec_suspend(struct hid_device *hdev, pm_message_t message)
++{
++	struct asus_ec *ec = hid_get_drvdata(hdev);
++	const u8 cmd[] = { ASUS_EC_REPORT_ID, 0xba, 0xc5, 0xc4, 0 };
++
++	cancel_work_sync(&ec->fn_lock_work);
++	cancel_work_sync(&ec->backlight_work);
++
++	/* The EC keeps the backlight on during suspend; switch it off but keep
++	 * ec->brightness so that resume restores it.
++	 */
++	mutex_lock(&ec->lock);
++	asus_ec_send(ec, cmd, sizeof(cmd));
++	mutex_unlock(&ec->lock);
++
++	return 0;
++}
++
++static int asus_ec_resume(struct hid_device *hdev)
++{
++	struct asus_ec *ec = hid_get_drvdata(hdev);
++	int ret;
++
++	/* Repeat the init sequence and restore brightness and Fn-lock */
++	ret = asus_ec_init_hw(ec);
++	if (ret)
++		hid_warn(hdev, "EC re-init after resume failed: %d\n", ret);
++
++	return 0;
++}
++
++static const struct hid_device_id asus_ec_devices[] = {
++	{ HID_I2C_DEVICE(ASUS_EC_VENDOR_ID, ASUS_EC_PRODUCT_ZENBOOK_A14) },
++	{ HID_I2C_DEVICE(ASUS_EC_VENDOR_ID, ASUS_EC_PRODUCT_VIVOBOOK_S15) },
++	{ }
++};
++MODULE_DEVICE_TABLE(hid, asus_ec_devices);
++
++static struct hid_driver asus_ec_driver = {
++	.name		= "hid-asus-ec",
++	.id_table	= asus_ec_devices,
++	.probe		= asus_ec_probe,
++	.remove		= asus_ec_remove,
++	.raw_event	= asus_ec_raw_event,
++	.suspend	= asus_ec_suspend,
++	.resume		= asus_ec_resume,
++	.reset_resume	= asus_ec_resume,
++	.driver = {
++		.dev_groups = asus_ec_groups,
++	},
++};
++module_hid_driver(asus_ec_driver);
++
++MODULE_AUTHOR("Alexandru Marc Serdeliuc <serdeliuk@yahoo.com>");
++MODULE_DESCRIPTION("HID driver for the ASUS EC on Snapdragon laptops (keyboard backlight, Fn keys)");
++MODULE_LICENSE("GPL");

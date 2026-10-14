@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# ASUS Vivobook S 15 (X1E80100): workaround for a 7.3 regression in
+# lpass-{wsa,rx,tx,va}-macro. Since 7.3 the LPASS macros gate all their clocks
+# in runtime PM (pm_clk, 100 ms autosuspend), and the SoundWire controller
+# resumes from clock stop without re-initialisation: bus clashes, WSA884x
+# parity errors, WCD RX UNATTACHED, no sound. Keep the macros powered, as in
+# 7.2. The helper skips kernels older than 7.3.
+ACTION=="add|bind", SUBSYSTEM=="platform", KERNEL=="6aa0000.codec|6ac0000.codec|6ae0000.codec|6b00000.codec|6d44000.codec", RUN+="@LIBEXECDIR@/vivobook-s15/lpass-rpm-on %k"

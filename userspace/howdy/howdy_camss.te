@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Minimal SELinux module for Howdy on the GDM screen (xdm_t context).
+# Allows access to /dev/video* and /dev/media* (v4l_device_t) including mmap,
+# and execmem for dlib/numpy in Python. If face login in GDM still fails
+# while sudo works, collect the AVC denials (ausearch -m avc -ts recent) and
+# extend this module (audit2allow -m howdy_camss).
+module howdy_camss 1.0;
+
+require {
+	type xdm_t;
+	type v4l_device_t;
+	class chr_file { getattr ioctl map open read write };
+	class process execmem;
+}
+
+allow xdm_t v4l_device_t:chr_file { getattr ioctl map open read write };
+allow xdm_t self:process execmem;

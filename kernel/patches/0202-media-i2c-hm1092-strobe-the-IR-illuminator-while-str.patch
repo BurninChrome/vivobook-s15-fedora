@@ -1,0 +1,210 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kacper Goc <11682528+BurninChrome@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 10:57:40 +0200
+Subject: [PATCH] media: i2c: hm1092: strobe the IR illuminator while streaming
+
+Local (non-upstream) patch for the ASUS Vivobook S15 S5507QAD.
+
+The upstream v6 series (Ramshouriesh R, 2026-08-01) dropped the IR
+illuminator support that the earlier 9-patch RFC series carried
+("[PATCH 3/9] media: i2c: hm1092: add Himax HM1092 mono NIR sensor
+driver", 2026-06-10). Without it the HM1092 image is black in a dark
+room, which makes it useless for face authentication.
+
+Port that code onto v6 unchanged in behaviour: take an optional
+led-class-flash device from the generic "leds" property and, while
+streaming, fire it for 50 ms every 100 ms (about 10 Hz, 50 % duty) at the
+flash-max-microamp limit from DT. The hardware safety timeout turns the
+LED off by itself if the work stops.
+
+Differences from the RFC code:
+- module parameter ir_led (default true) to disable the illuminator
+  without touching DT;
+- compiled out when LEDS_CLASS_FLASH is not reachable, Kconfig gets the
+  usual "depends on LEDS_CLASS_FLASH || !LEDS_CLASS_FLASH";
+- the probe keeps v4l2_async_register_subdev_sensor(): on 7.2 the
+  privacy LED lookup (led_get(dev, "privacy")) returns -ENOENT when the
+  node has "leds" but no "led-names", so it does not reject the phandle.
+
+Source: https://ratatoskr.run/linux-media/2026/06/17114247
+
+Assisted-by: LLM (Claude Opus 5.5)
+---
+ drivers/media/i2c/Kconfig  |   1 +
+ drivers/media/i2c/hm1092.c | 109 +++++++++++++++++++++++++++++++++++++
+ 2 files changed, 110 insertions(+)
+
+diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
+index f64cbffc9..2f2ff333c 100644
+--- a/drivers/media/i2c/Kconfig
++++ b/drivers/media/i2c/Kconfig
+@@ -139,6 +139,7 @@ config VIDEO_HI847
+ 
+ config VIDEO_HM1092
+ 	tristate "Himax HM1092 sensor support"
++	depends on LEDS_CLASS_FLASH || !LEDS_CLASS_FLASH
+ 	select V4L2_CCI_I2C
+ 	help
+ 	  This is a Video4Linux2 sensor driver for the Himax HM1092
+diff --git a/drivers/media/i2c/hm1092.c b/drivers/media/i2c/hm1092.c
+index eb3607a7e..ee3cb54b9 100644
+--- a/drivers/media/i2c/hm1092.c
++++ b/drivers/media/i2c/hm1092.c
+@@ -9,6 +9,8 @@
+ #include <linux/delay.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/i2c.h>
++#include <linux/led-class-flash.h>
++#include <linux/leds.h>
+ #include <linux/module.h>
+ #include <linux/pm_runtime.h>
+ #include <linux/regulator/consumer.h>
+@@ -31,6 +33,21 @@
+ #define HM1092_MCLK			24000000
+ #define HM1092_BITS_PER_SAMPLE		10
+ 
++/*
++ * IR illuminator strobe (optional "leds" phandle to a led-class-flash
++ * device, e.g. a PM8550 flash LED channel). While streaming the flash is
++ * fired for HM1092_FLASH_TIMEOUT_US every HM1092_FLASH_REFIRE_MS, i.e. a
++ * ~10 Hz blink at ~50 % duty, at the flash current limit from DT
++ * (flash-max-microamp). The flash hardware safety timeout turns the LED off
++ * on its own if the work stops being scheduled.
++ */
++#define HM1092_FLASH_TIMEOUT_US		50000
++#define HM1092_FLASH_REFIRE_MS		100
++
++static bool ir_led = true;
++module_param(ir_led, bool, 0444);
++MODULE_PARM_DESC(ir_led, "Strobe the IR illuminator while streaming (default: true)");
++
+ #define HM1092_REG_STREAM		CCI_REG8(0x0100)
+ #define HM1092_STREAM_STANDBY		0x00
+ #define HM1092_STREAM_ON		0x01
+@@ -327,6 +344,10 @@ struct hm1092 {
+ 	struct v4l2_ctrl *vblank;
+ 	struct v4l2_ctrl *exposure;
+ 	u8 mipi_lanes;
++
++	/* Optional IR illuminator strobed while streaming. */
++	struct led_classdev_flash *flash;
++	struct delayed_work flash_work;
+ };
+ 
+ static inline struct hm1092 *to_hm1092(struct v4l2_subdev *sd)
+@@ -334,6 +355,87 @@ static inline struct hm1092 *to_hm1092(struct v4l2_subdev *sd)
+ 	return container_of(sd, struct hm1092, sd);
+ }
+ 
++#if IS_REACHABLE(CONFIG_LEDS_CLASS_FLASH)
++/*
++ * (Re)arm and fire the flash. The qcom flash controller does an internal
++ * disable+enable on each strobe and its safety timeout turns the LED off on
++ * its own, so brightness and timeout are programmed every time. The strobe
++ * is released first: a bare re-strobe is treated as "current still in use"
++ * and re-fires at 0 mA.
++ */
++static void hm1092_flash_fire(struct hm1092 *hm1092)
++{
++	struct led_classdev_flash *flash = hm1092->flash;
++
++	led_set_flash_strobe(flash, false);
++	led_set_flash_brightness(flash, flash->brightness.max);
++	led_set_flash_timeout(flash, HM1092_FLASH_TIMEOUT_US);
++	led_set_flash_strobe(flash, true);
++}
++
++static void hm1092_flash_work(struct work_struct *work)
++{
++	struct hm1092 *hm1092 =
++		container_of(to_delayed_work(work), struct hm1092, flash_work);
++
++	hm1092_flash_fire(hm1092);
++	schedule_delayed_work(&hm1092->flash_work,
++			      msecs_to_jiffies(HM1092_FLASH_REFIRE_MS));
++}
++
++static void hm1092_flash_enable(struct hm1092 *hm1092)
++{
++	if (!hm1092->flash)
++		return;
++
++	hm1092_flash_fire(hm1092);
++	schedule_delayed_work(&hm1092->flash_work,
++			      msecs_to_jiffies(HM1092_FLASH_REFIRE_MS));
++}
++
++static void hm1092_flash_disable(struct hm1092 *hm1092)
++{
++	if (!hm1092->flash)
++		return;
++
++	cancel_delayed_work_sync(&hm1092->flash_work);
++	led_set_flash_strobe(hm1092->flash, false);
++}
++
++/* Grab the IR illuminator referenced by the optional "leds" phandle. */
++static int hm1092_get_flash(struct hm1092 *hm1092)
++{
++	struct led_classdev *cdev;
++
++	if (!ir_led)
++		return 0;
++
++	cdev = devm_of_led_get_optional(hm1092->dev, 0);
++	if (IS_ERR(cdev))
++		return dev_err_probe(hm1092->dev, PTR_ERR(cdev),
++				     "failed to get IR illuminator LED\n");
++	if (!cdev)
++		return 0;
++
++	if (!(cdev->flags & LED_DEV_CAP_FLASH)) {
++		dev_warn(hm1092->dev,
++			 "'leds' phandle is not a flash LED, IR illuminator disabled\n");
++		return 0;
++	}
++
++	hm1092->flash = lcdev_to_flcdev(cdev);
++	INIT_DELAYED_WORK(&hm1092->flash_work, hm1092_flash_work);
++	dev_info(hm1092->dev, "IR illuminator linked (%s, max %u uA)\n",
++		 cdev->name, hm1092->flash->brightness.max);
++
++	return 0;
++}
++#else
++static void hm1092_flash_enable(struct hm1092 *hm1092) { }
++static void hm1092_flash_disable(struct hm1092 *hm1092) { }
++static int hm1092_get_flash(struct hm1092 *hm1092) { return 0; }
++#endif
++
+ static int hm1092_set_ctrl(struct v4l2_ctrl *ctrl)
+ {
+ 	struct hm1092 *hm1092 = container_of(ctrl->handler, struct hm1092,
+@@ -518,6 +620,8 @@ static int hm1092_enable_streams(struct v4l2_subdev *sd,
+ 			HM1092_STREAM_ON, NULL);
+ 	if (ret)
+ 		dev_err(hm1092->dev, "failed to start streaming\n");
++	else
++		hm1092_flash_enable(hm1092);
+ 
+ out:
+ 	if (ret)
+@@ -533,6 +637,7 @@ static int hm1092_disable_streams(struct v4l2_subdev *sd,
+ 	struct hm1092 *hm1092 = to_hm1092(sd);
+ 	int ret;
+ 
++	hm1092_flash_disable(hm1092);
+ 	ret = cci_write(hm1092->regmap, HM1092_REG_STREAM,
+ 			HM1092_STREAM_STANDBY, NULL);
+ 	pm_runtime_put(hm1092->dev);
+@@ -769,6 +874,10 @@ static int hm1092_probe(struct i2c_client *client)
+ 
+ 	hm1092->dev = &client->dev;
+ 
++	ret = hm1092_get_flash(hm1092);
++	if (ret)
++		return ret;
++
+ 	hm1092->img_clk = devm_v4l2_sensor_clk_get(hm1092->dev, NULL);
+ 	if (IS_ERR(hm1092->img_clk))
+ 		return dev_err_probe(hm1092->dev, PTR_ERR(hm1092->img_clk),

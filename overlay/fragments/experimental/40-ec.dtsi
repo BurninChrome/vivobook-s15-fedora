@@ -1,0 +1,49 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * Embedded controller of the ASUS Vivobook S 15 (S5507QA, x1e80100).
+ * EXPERIMENTAL: built only into vivobook-s15-experimental.dtbo, used when
+ * EXPERIMENTAL_EC=yes in /etc/vivobook-s15.conf. Read docs/ec-fan-control.md.
+ *
+ * Source: ASUS DSDT of BIOS S5507QAD.367 (see docs/ec-protocol.md)
+ *  - \_SB.I2C6 = QUP_0_SE_5 @ 0xb94000 = &i2c5, EC at 0x76, 400 kHz
+ *  - GpioInt(Edge, ActiveLow, PullUp) on virtual ACPI pin 0x140, which is
+ *    GIO0 _CRS interrupt #5 = GIC 0x2f8 = PDC 142 = TLMM GPIO 66
+ *    (same pin and address as the Hamoa CRD / IOT EVK EC)
+ *  - qcom,tsens: CPU cluster sensors averaged for SoC Tj, as on the CRD
+ *
+ * WARNING: with the driver bound the EC receives SoC Tj and from then on
+ * hard resets the machine ~2 min after the reports stop.
+ * The driver (patch 0408) never stops them.
+ *
+ * Needs kernel patches kernel/patches/0401-0409.
+ * Without them no driver matches "asus,vivobook-s15-ec" and the node is
+ * inert. Deliberately no "qcom,hamoa-crd-ec" fallback: the CRD config
+ * would calibrate the fans and overwrite the ASUS fan curve.
+ */
+
+#include <dt-bindings/interrupt-controller/irq.h>
+
+&i2c5 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	embedded-controller@76 {
+		compatible = "asus,vivobook-s15-ec";
+		reg = <0x76>;
+
+		interrupts-extended = <&tlmm 66 IRQ_TYPE_EDGE_FALLING>;
+
+		pinctrl-0 = <&ec_int_n_default>;
+		pinctrl-names = "default";
+
+		qcom,tsens = <&tsens2 11>, <&tsens3 15>;
+	};
+};
+
+&tlmm {
+	ec_int_n_default: ec-int-n-state {
+		pins = "gpio66";
+		function = "gpio";
+		bias-pull-up;
+	};
+};

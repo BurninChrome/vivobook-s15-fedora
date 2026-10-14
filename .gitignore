@@ -1,0 +1,41 @@
+# Build output
+*.dtb
+*.dtbo
+*.o
+*.ko
+*.mod*
+*.rpm
+build/
+__pycache__/
+.venv/
+
+# Vendor firmware and packages: never commit these
+firmware-out/
+*.exe
+*.mbn
+*.elf
+*.jsn
+*.cab
+*.aml
+*.dsl
+
+# Private data: logs, captures, face models, keys
+*.log
+dmesg*.txt
+journal*.txt
+*.png
+!docs/img/*.png
+*.jpg
+*.raw
+*.y10*
+*.dat
+models/
+*.pem
+*.key
+*.x509
+
+# Logo extracted locally by userspace/plymouth/get-logo.sh (ASUS trademark)
+userspace/plymouth/logo/
+# Downloaded ASUS package and extracted files
+SOCPackage_*.exe
+build-bpf/

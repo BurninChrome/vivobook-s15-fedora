@@ -1,0 +1,19 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# kernel-install plugin: merge the Vivobook S 15 overlay into the DTB inside
+# /boot/vmlinuz-<version> (stubble UKI). Runs after 20-grub.install, which
+# copies the kernel image and DTBs to /boot.
+COMMAND="$1"
+KERNEL_VERSION="$2"
+
+case "$COMMAND" in
+add)
+	@LIBEXECDIR@/vivobook-s15/apply-dtb "$KERNEL_VERSION" ||
+		echo "vivobook-s15: could not update the DTB of $KERNEL_VERSION (it will boot without audio and cameras)" >&2
+	;;
+remove)
+	rm -f /var/backups/x1e/vmlinuz-"$KERNEL_VERSION".orig-*
+	;;
+esac
+exit 0

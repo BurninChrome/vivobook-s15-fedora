@@ -1,0 +1,53 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# Restore the ASUS Vivobook S 15 UCM profile after alsa-ucm updates.
+# Writes files only when needed (the .path unit reacts to changes).
+# To be removed once alsa-ucm-conf ships the profile.
+set -euo pipefail
+
+LIB="$(dirname "$(readlink -f "$0")")"
+DATA=${VIVOBOOK_S15_DATADIR:-@DATADIR@/vivobook-s15}
+UCM=/usr/share/alsa/ucm2/Qualcomm/x1e80100
+DISP="$UCM/x1e80100.conf"
+
+[ -f "$DISP" ] || exit 0
+changed=0
+
+for f in ASUS-Vivobook-S15.conf ASUS-Vivobook-S15-Speaker.conf ASUS-Vivobook-S15-Headphones.conf; do
+	if ! cmp -s "$DATA/ucm/$f" "$UCM/$f"; then
+		install -m 0644 "$DATA/ucm/$f" "$UCM/$f"
+		changed=1
+	fi
+done
+
+if ! grep -q "ASUS-Vivobook-S15.conf" "$DISP"; then
+	awk '
+		/^If\.LENOVOT14s \{/ && !done {
+			print "If.ASUSVivobookS15 {"
+			print "\tCondition {"
+			print "\t\tType RegexMatch"
+			print "\t\tString \"${var:DMI_info}\""
+			print "\t\tRegex \"ASUSTeK COMPUTER.*ASUS Vivobook S 15\""
+			print "\t}"
+			print "\tTrue.Include.vivobook.File \"/Qualcomm/x1e80100/ASUS-Vivobook-S15.conf\""
+			print "}"
+			print ""
+			done = 1
+		}
+		{ print }
+	' "$DISP" > "$DISP.new"
+	mv "$DISP.new" "$DISP"
+	changed=1
+fi
+
+# Only one If branch may match, so drop "Vivobook S 15" from the T14s regex.
+if grep -q '|Vivobook S 15|' "$DISP"; then
+	sed -i 's/|Vivobook S 15|/|/' "$DISP"
+	changed=1
+fi
+
+if [ "$changed" = 1 ]; then
+	restorecon -R "$UCM" 2>/dev/null || true
+	echo "vivobook-s15: UCM profile restored"
+fi

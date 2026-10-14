@@ -1,0 +1,242 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Anvesh Jain P <anvesh.p@oss.qualcomm.com>
+Date: Tue, 28 Jul 2026 23:14:31 +0530
+Subject: [PATCH] platform: arm64: qcom-hamoa-ec: Switch fan profile based on
+ power supply state
+
+Add the EC command definitions and handler functions for switching and
+reading the EC fan profile.
+
+Register a power supply notifier so the driver can react to AC/battery
+transitions: on each PSY_EVENT_PROP_CHANGED notification, queue work
+that checks power_supply_is_system_supplied() and, if the AC/battery
+state has actually changed, switches the fan profile to the
+performance profile on AC or the battery-saver profile on battery.
+Track the last-applied state in on_ac_power to avoid redundant EC
+writes. Run the initial sync once at probe time, and defer the actual
+switch to a work item since the notifier callback runs in atomic
+context.
+
+Serialize the fan profile write under the existing io_lock mutex,
+alongside the other EC command sequences.
+
+Signed-off-by: Anvesh Jain P <anvesh.p@oss.qualcomm.com>
+---
+ drivers/platform/arm64/qcom-hamoa-ec.c | 158 +++++++++++++++++++++++++
+ 1 file changed, 158 insertions(+)
+
+diff --git a/drivers/platform/arm64/qcom-hamoa-ec.c b/drivers/platform/arm64/qcom-hamoa-ec.c
+index cb16e4062..6128947f9 100644
+--- a/drivers/platform/arm64/qcom-hamoa-ec.c
++++ b/drivers/platform/arm64/qcom-hamoa-ec.c
+@@ -19,6 +19,7 @@
+ #include <linux/of_platform.h>
+ #include <linux/platform_device.h>
+ #include <linux/pm.h>
++#include <linux/power_supply.h>
+ #include <linux/slab.h>
+ #include <linux/thermal.h>
+ 
+@@ -26,10 +27,14 @@
+ #define EC_FW_VERSION_CMD	0x0e
+ #define EC_SOC_TEMP_CMD	0x20
+ #define EC_MODERN_STANDBY_CMD	0x23
++#define EC_FAN_PROFILE_CMD	0x24
+ #define EC_FAN_DBG_CONTROL_CMD	0x30
+ #define EC_SCI_EVT_CONTROL_CMD	0x35
+ #define EC_THERMAL_CAP_CMD	0x42
+ 
++#define EC_FAN_PROFILE_BEST_PERF_PLUGGED_IN	0x6
++#define EC_FAN_PROFILE_BETTER_BATT_ON_BATT	0x3
++
+ #define EC_SOC_TEMP_SOURCE_TJ			0x1
+ #define EC_SOC_TEMP_SOURCE_TSKIN		0x2
+ #define EC_SOC_TEMP_DATA_SIZE			2
+@@ -92,11 +97,14 @@ struct qcom_ec {
+ 	struct i2c_client *client;
+ 	struct qcom_ec_cooling_dev *ec_cdev;
+ 	struct thermal_zone_device **soc_tj_zones;
++	struct notifier_block psy_nb;
+ 	struct delayed_work soc_tj_work;
++	struct work_struct psy_work;
+ 	struct mutex io_lock; /* serializes EC command sequences */
+ 	struct qcom_ec_thermal_cap thermal_cap;
+ 	struct qcom_ec_version version;
+ 	int num_soc_tj_zones;
++	int on_ac_power; /* -1 = unknown, 0 = battery, 1 = AC */
+ };
+ 
+ static int qcom_ec_read(struct qcom_ec *ec, u8 cmd, u8 resp_len, u8 *resp)
+@@ -353,6 +361,140 @@ static int qcom_ec_send_soc_tj_temp(struct qcom_ec *ec)
+ 	return ret;
+ }
+ 
++/*
++ * SoC to EC Fan Profile switch command:
++ *
++ * Command Payload:
++ * -----------------------------------------------------------------------
++ * | Offset	| Name		| Description				|
++ * -----------------------------------------------------------------------
++ * | 0x00	| Command = 0x24| SoC to EC Fan Profile switch command	|
++ * -----------------------------------------------------------------------
++ * | 0x01	| Fan Profile ID| Bit 0-3: Fan Profile			|
++ * |		|		| 0x0 : Invalid Profile			|
++ * |		|		| 0x1 : Battery saver profile		|
++ * |		|		| 0x2 : Better Battery with charger	|
++ * |		|		|       plugged in			|
++ * |		|		| 0x3 : Better Battery with charger	|
++ * |		|		|       removed				|
++ * |		|		| 0x4 : Better Performance with charger	|
++ * |		|		|       plugged in			|
++ * |		|		| 0x5 : Better Performance with charger	|
++ * |		|		|       plugged out			|
++ * |		|		| 0x6 : Best Performance with charger	|
++ * |		|		|       plugged in (default)		|
++ * |		|		| 0x7 : Best Performance with charger	|
++ * |		|		|       plugged out			|
++ * |		|		| 0x8 - 0xF : Reserved			|
++ * |		|		| Bit 4-7: Reserved			|
++ * -----------------------------------------------------------------------
++ *
++ */
++static int qcom_ec_set_fan_profile(struct qcom_ec *ec, u8 profile_id)
++{
++	int ret;
++
++	ret = i2c_smbus_write_byte_data(ec->client, EC_FAN_PROFILE_CMD, profile_id);
++	if (ret < 0)
++		dev_err(&ec->client->dev, "Failed to set fan profile 0x%x: %d\n",
++			profile_id, ret);
++	else
++		dev_dbg(&ec->client->dev, "Fan profile set to 0x%x\n", profile_id);
++
++	return ret;
++}
++
++/*
++ * SoC to EC Fan Profile read command:
++ *
++ * Read Response:
++ * -----------------------------------------------------------------------
++ * | Offset	| Name		| Description				|
++ * -----------------------------------------------------------------------
++ * | 0x00	| Fan Profile ID| Bit 0-3: Fan Profile			|
++ * |		|		| 0x0 : Invalid Profile			|
++ * |		|		| 0x1 : Battery saver profile		|
++ * |		|		| 0x2 : Better Battery with charger	|
++ * |		|		|       plugged in			|
++ * |		|		| 0x3 : Better Battery with charger	|
++ * |		|		|       removed				|
++ * |		|		| 0x4 : Better Performance with charger	|
++ * |		|		|       plugged in			|
++ * |		|		| 0x5 : Better Performance with charger	|
++ * |		|		|       plugged out			|
++ * |		|		| 0x6 : Best Performance with charger	|
++ * |		|		|       plugged in (default)		|
++ * |		|		| 0x7 : Best Performance with charger	|
++ * |		|		|       plugged out			|
++ * |		|		| 0x8 - 0xF : Reserved			|
++ * |		|		| Bit 4-7: Fan ID			|
++ * |		|		| 0x1 : Fan 1				|
++ * |		|		| 0x2 : Fan 2				|
++ * -----------------------------------------------------------------------
++ *
++ */
++static int qcom_ec_get_fan_profile(struct qcom_ec *ec, u8 *profile_id)
++{
++	int ret;
++
++	ret = i2c_smbus_read_byte_data(ec->client, EC_FAN_PROFILE_CMD);
++	if (ret < 0)
++		return ret;
++
++	*profile_id = (u8)ret & GENMASK(3, 0);
++
++	return 0;
++}
++
++static int qcom_ec_update_profile_from_power_supply(struct qcom_ec *ec)
++{
++	int on_ac_power;
++	u8 profile;
++	int ret = 0;
++
++	on_ac_power = power_supply_is_system_supplied() > 0 ? 1 : 0;
++
++	profile = on_ac_power ? EC_FAN_PROFILE_BEST_PERF_PLUGGED_IN :
++				EC_FAN_PROFILE_BETTER_BATT_ON_BATT;
++
++	mutex_lock(&ec->io_lock);
++
++	if (ec->on_ac_power != on_ac_power) {
++		ret = qcom_ec_set_fan_profile(ec, profile);
++		if (!ret)
++			ec->on_ac_power = on_ac_power;
++	}
++
++	mutex_unlock(&ec->io_lock);
++
++	return ret;
++}
++
++static void qcom_ec_unreg_psy_notifier(void *data)
++{
++	power_supply_unreg_notifier(data);
++}
++
++static void qcom_ec_psy_work_fn(struct work_struct *work)
++{
++	struct qcom_ec *ec = container_of(work, struct qcom_ec, psy_work);
++
++	qcom_ec_update_profile_from_power_supply(ec);
++}
++
++static int qcom_ec_psy_notifier(struct notifier_block *nb,
++				unsigned long event, void *ptr)
++{
++	struct qcom_ec *ec = container_of(nb, struct qcom_ec, psy_nb);
++
++	if (event != PSY_EVENT_PROP_CHANGED)
++		return NOTIFY_DONE;
++
++	queue_work(system_long_wq, &ec->psy_work);
++
++	return NOTIFY_OK;
++}
++
+ static irqreturn_t qcom_ec_irq(int irq, void *data)
+ {
+ 	struct qcom_ec *ec = data;
+@@ -572,8 +714,13 @@ static int qcom_ec_probe(struct i2c_client *client)
+ 		return -ENOMEM;
+ 
+ 	ec->client = client;
++	ec->on_ac_power = -1;
+ 	mutex_init(&ec->io_lock);
+ 
++	ret = devm_work_autocancel(dev, &ec->psy_work, qcom_ec_psy_work_fn);
++	if (ret)
++		return ret;
++
+ 	ret = devm_request_threaded_irq(dev, client->irq, NULL, qcom_ec_irq,
+ 					IRQF_ONESHOT, "qcom_ec", ec);
+ 	if (ret < 0)
+@@ -632,6 +779,17 @@ static int qcom_ec_probe(struct i2c_client *client)
+ 		}
+ 	}
+ 
++	ec->psy_nb.notifier_call = qcom_ec_psy_notifier;
++	ret = power_supply_reg_notifier(&ec->psy_nb);
++	if (ret)
++		return dev_err_probe(dev, ret, "Failed to register power supply notifier\n");
++
++	ret = devm_add_action_or_reset(dev, qcom_ec_unreg_psy_notifier, &ec->psy_nb);
++	if (ret)
++		return ret;
++
++	qcom_ec_update_profile_from_power_supply(ec);
++
+ 	return 0;
+ }
+ 

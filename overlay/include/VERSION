@@ -1,0 +1,3 @@
+Unmodified copies of include/dt-bindings/ from Linux 7.3-rc6 (mainline commit af32da41b032,
+as packaged in Fedora kernel-7.3.0-0.rc6.261009gaf32da41b032.55).
+Refresh with: overlay/update-include.sh <kernel tree>

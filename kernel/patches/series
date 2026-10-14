@@ -1,0 +1,16 @@
+# Patch order. One file name per line, comments start with '#'.
+0010-i2c-qcom-cci-power-on-GDSC-via-pm_runtime-before-hw-init.patch
+0200-media-dt-bindings-Add-Himax-HM1092-NIR-sensor.patch
+0201-media-i2c-hm1092-add-Himax-HM1092-mono-NIR-sensor-dr.patch
+0202-media-i2c-hm1092-strobe-the-IR-illuminator-while-str.patch
+0300-HID-asus-ec-add-ASUS-EC-hotkeys-and-keyboard-backlight.patch
+0401-dt-bindings-embedded-controller-qcom-hamoa-crd-ec-Ad.patch
+0402-platform-arm64-qcom-hamoa-ec-Add-SoC-junction-temper.patch
+0403-platform-arm64-qcom-hamoa-ec-Switch-fan-profile-base.patch
+0404-platform-arm64-qcom-hamoa-ec-Add-fan-RPM-query-and-L.patch
+0405-platform-arm64-qcom-hamoa-ec-Verify-required-I2C-ada.patch
+0406-platform-arm64-qcom-hamoa-ec-Retry-I2C-transfers-on-.patch
+0407-platform-arm64-qcom-hamoa-ec-Add-ASUS-Vivobook-S-15-.patch
+0408-platform-arm64-qcom-hamoa-ec-Never-starve-the-ASUS-E.patch
+0409-platform-arm64-qcom-hamoa-ec-Defer-probe-until-the-t.patch
+0500-usb-typec-mux-ps883x-handle-DP-pin-F-and-wait-after-config-writes.patch

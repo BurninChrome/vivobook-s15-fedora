@@ -1,0 +1,296 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kacper Goc <11682528+BurninChrome@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 06:59:04 +0200
+Subject: [PATCH] platform: arm64: qcom-hamoa-ec: Never starve the ASUS EC of
+ SoC Tj
+
+Once the ASUS Vivobook S 15 EC has received a SoC junction temperature,
+it expects a steady stream. When the reports stop it runs the fans at
+full speed after about 70 s and hard resets the machine about two
+minutes later, even in automatic fan mode (observed on S5507QA, EC FW
+3.1.1).
+
+Add a tj_keepalive flag for such ECs and make sure the feed cannot stop
+while the system runs:
+- report from a dedicated high priority WQ_MEM_RECLAIM workqueue,
+- repeat the last value when no thermal zone can be read, and log a
+  critical message when no report got through for 10 s,
+- pin the module once the feed starts and suppress sysfs unbind (the
+  Fedora kernel has no forced module unload),
+- do not fail probe after the feed has started,
+- refuse system suspend unless allow_suspend is set, until it is known
+  that modern standby enter (0x23 0x01, sent by Windows in PEP0._DSM
+  function 7) stops the EC watchdog; when allowed, send a fresh report
+  right before it, keep feeding if it fails and report again right
+  after modern standby exit on resume,
+- send modern standby enter at shutdown/reboot (shutdown_ms_enter) and
+  modern standby exit at probe.
+
+Assisted-by: LLM (Claude Opus 5.5)
+---
+ drivers/platform/arm64/qcom-hamoa-ec.c | 139 ++++++++++++++++++++++---
+ 1 file changed, 127 insertions(+), 12 deletions(-)
+
+diff --git a/drivers/platform/arm64/qcom-hamoa-ec.c b/drivers/platform/arm64/qcom-hamoa-ec.c
+index 922347b0a..61e35273d 100644
+--- a/drivers/platform/arm64/qcom-hamoa-ec.c
++++ b/drivers/platform/arm64/qcom-hamoa-ec.c
+@@ -68,6 +68,14 @@ static int tj_offset_dk;
+ module_param(tj_offset_dk, int, 0644);
+ MODULE_PARM_DESC(tj_offset_dk, "Offset in 0.1 degree units added to the SoC Tj sent to the EC (2732 for an EC expecting 0.1 K)");
+ 
++static bool allow_suspend;
++module_param(allow_suspend, bool, 0644);
++MODULE_PARM_DESC(allow_suspend, "Allow system suspend on ECs that need a constant SoC Tj feed (only once MS enter is known to stop the EC Tj watchdog)");
++
++static bool shutdown_ms_enter = true;
++module_param(shutdown_ms_enter, bool, 0644);
++MODULE_PARM_DESC(shutdown_ms_enter, "Send modern standby enter to a Tj keepalive EC at shutdown/reboot");
++
+ static bool thermistor_kelvin;
+ module_param(thermistor_kelvin, bool, 0644);
+ MODULE_PARM_DESC(thermistor_kelvin, "EC thermistor readings are in 0.1 K instead of 0.1 degC");
+@@ -126,6 +134,12 @@ struct qcom_ec_lut_config {
+ 	bool fw_fan_curve;
+ 	/* Fan count to assume when the EC lacks the thermal capability command */
+ 	u8 default_fan_cnt;
++	/*
++	 * Once it has received a SoC Tj, the EC expects a steady stream: it
++	 * runs the fans at full speed ~70 s after the last report and hard
++	 * resets the machine ~2 min later. The feed must never stop.
++	 */
++	bool tj_keepalive;
+ };
+ 
+ static const struct qcom_ec_fan_lut_temp_entry hamoa_lut_temps[] = {
+@@ -200,6 +214,7 @@ static const struct qcom_ec_lut_config asus_vivobook_s15_config = {
+ 	.send_soc_tj              = true,
+ 	.fw_fan_curve             = true,
+ 	.default_fan_cnt          = 2,
++	.tj_keepalive             = true,
+ };
+ 
+ static_assert(ARRAY_SIZE(hamoa_lut_temps) <= EC_MAX_LUT_ENTRIES);
+@@ -244,6 +259,11 @@ struct qcom_ec {
+ 	struct qcom_ec_thermal_cap thermal_cap;
+ 	struct qcom_ec_version version;
+ 	int num_soc_tj_zones;
++	struct workqueue_struct *tj_wq;
++	unsigned long tj_last_ok;	/* jiffies of the last successful Tj report */
++	u16 tj_last;			/* last reported Tj, 0.1 deg C */
++	bool tj_armed;			/* EC has received a Tj, the feed must go on */
++	bool tj_crit_logged;
+ 	u8 fan_profile;
+ 	int on_ac_power; /* -1 = unknown, 0 = battery, 1 = AC */
+ 	bool calibrating;
+@@ -256,6 +276,12 @@ static bool qcom_ec_owns_fans(struct qcom_ec *ec)
+ 	return ec->lut_cfg && !ec->lut_cfg->fw_fan_curve && ec->thermal_cap.fan_cnt;
+ }
+ 
++/* True when the EC hard resets the machine if the SoC Tj feed stops */
++static bool qcom_ec_tj_keepalive(struct qcom_ec *ec)
++{
++	return ec->lut_cfg && ec->lut_cfg->tj_keepalive;
++}
++
+ static int qcom_ec_write(struct qcom_ec *ec, u8 cmd, const u8 *data, size_t len)
+ {
+ 	struct i2c_msg msg;
+@@ -583,11 +609,15 @@ static int qcom_ec_send_soc_tj_temp(struct qcom_ec *ec)
+ 		valid++;
+ 	}
+ 
+-	if (!valid)
++	if (valid) {
++		/* Convert millidegrees Celsius to 0.1 deg C units as required by EC */
++		temp = clamp(total / valid / 100 + tj_offset_dk, 0, (int)U16_MAX);
++	} else if (ec->tj_armed) {
++		/* Never let an armed EC starve: repeat the last value */
++		temp = ec->tj_last;
++	} else {
+ 		return 0;
+-
+-	/* Convert millidegrees Celsius to 0.1 deg C units as required by EC */
+-	temp = clamp(total / valid / 100 + tj_offset_dk, 0, (int)U16_MAX);
++	}
+ 	request[0] = EC_SOC_TEMP_SOURCE_TJ;
+ 	request[1] = EC_SOC_TEMP_DATA_SIZE;
+ 	request[2] = temp & 0xff;
+@@ -597,11 +627,24 @@ static int qcom_ec_send_soc_tj_temp(struct qcom_ec *ec)
+ 	ret = i2c_smbus_write_i2c_block_data(ec->client, EC_SOC_TEMP_CMD,
+ 					     sizeof(request), request);
+ 	mutex_unlock(&ec->io_lock);
+-	if (ret < 0)
++	if (ret < 0) {
+ 		dev_err_ratelimited(&ec->client->dev,
+ 				    "Failed to send SoC Tj temperature: %d\n", ret);
++		if (ec->tj_armed && !ec->tj_crit_logged &&
++		    time_after(jiffies, ec->tj_last_ok + 10 * HZ)) {
++			dev_crit(&ec->client->dev,
++				 "No SoC Tj delivered to the EC for 10 s, it will reset the machine if this persists\n");
++			ec->tj_crit_logged = true;
++		}
++		return ret;
++	}
+ 
+-	return ret;
++	ec->tj_last = temp;
++	ec->tj_last_ok = jiffies;
++	ec->tj_crit_logged = false;
++	ec->tj_armed = true;
++
++	return 0;
+ }
+ 
+ /*
+@@ -1166,7 +1209,7 @@ static void qcom_ec_soc_tj_work_fn(struct work_struct *work)
+ 
+ 	qcom_ec_send_soc_tj_temp(ec);
+ 
+-	queue_delayed_work(system_percpu_wq, &ec->soc_tj_work, EC_SOC_TJ_TEMP_POLL_JIFFIES);
++	queue_delayed_work(ec->tj_wq, &ec->soc_tj_work, EC_SOC_TJ_TEMP_POLL_JIFFIES);
+ }
+ 
+ static void qcom_ec_fan_calib_work_fn(struct work_struct *work)
+@@ -1230,7 +1273,8 @@ static int qcom_ec_resume(struct device *dev)
+ 
+ 	if (ec->lut_cfg && ec->lut_cfg->send_soc_tj) {
+ 		enable_delayed_work(&ec->soc_tj_work);
+-		queue_delayed_work(system_percpu_wq, &ec->soc_tj_work, EC_SOC_TJ_TEMP_POLL_JIFFIES);
++		/* Report right away, the EC watchdog runs again after MS exit */
++		queue_delayed_work(ec->tj_wq, &ec->soc_tj_work, 0);
+ 	}
+ 	return 0;
+ }
+@@ -1247,17 +1291,50 @@ static int qcom_ec_suspend(struct device *dev)
+ 		cancel_work_sync(&ec->psy_work);
+ 	}
+ 
+-	if (ec->lut_cfg && ec->lut_cfg->send_soc_tj)
++	if (qcom_ec_tj_keepalive(ec) && !allow_suspend) {
++		dev_warn(dev, "Suspend refused: EC needs a constant SoC Tj feed (see allow_suspend)\n");
++		return -EBUSY;
++	}
++
++	if (ec->lut_cfg && ec->lut_cfg->send_soc_tj) {
+ 		disable_delayed_work_sync(&ec->soc_tj_work);
++		/* Fresh report right before MS enter */
++		qcom_ec_send_soc_tj_temp(ec);
++	}
+ 
+ 	mutex_lock(&ec->io_lock);
+ 	ret = i2c_smbus_write_byte_data(client, EC_MODERN_STANDBY_CMD,
+ 					EC_MODERN_STANDBY_ENTER);
+ 	mutex_unlock(&ec->io_lock);
+ 
++	if (ret && ec->lut_cfg && ec->lut_cfg->send_soc_tj) {
++		/* Suspend is aborted and our resume will not run: keep feeding */
++		enable_delayed_work(&ec->soc_tj_work);
++		queue_delayed_work(ec->tj_wq, &ec->soc_tj_work, 0);
++	}
++
+ 	return ret;
+ }
+ 
++/*
++ * Shutdown/reboot: the feed stops with the kernel. Tell a keepalive EC that
++ * the SoC enters modern standby, as Windows does in PEP0._DSM function 7,
++ * hoping it stops waiting for Tj (not verified yet, see shutdown_ms_enter).
++ */
++static void qcom_ec_shutdown(struct i2c_client *client)
++{
++	struct qcom_ec *ec = i2c_get_clientdata(client);
++
++	if (!ec || !qcom_ec_tj_keepalive(ec) || !shutdown_ms_enter)
++		return;
++
++	disable_delayed_work_sync(&ec->soc_tj_work);
++
++	mutex_lock(&ec->io_lock);
++	i2c_smbus_write_byte_data(client, EC_MODERN_STANDBY_CMD, EC_MODERN_STANDBY_ENTER);
++	mutex_unlock(&ec->io_lock);
++}
++
+ #if IS_REACHABLE(CONFIG_HWMON)
+ /*
+  * EC Thermistor Read (commands 0x29 - 0x2f for thermistor 1 - 7):
+@@ -1442,12 +1519,35 @@ static int qcom_ec_probe(struct i2c_client *client)
+ 		if (ret < 0)
+ 			return dev_err_probe(dev, ret, "Failed to setup SoC Tj thermal zones\n");
+ 
++		ec->tj_wq = devm_alloc_ordered_workqueue(dev, "qcom_ec_tj",
++							 WQ_HIGHPRI | WQ_MEM_RECLAIM);
++		if (!ec->tj_wq)
++			return -ENOMEM;
++
+ 		ret = devm_delayed_work_autocancel(dev, &ec->soc_tj_work,
+ 						   qcom_ec_soc_tj_work_fn);
+ 		if (ret)
+ 			return ret;
+ 
+-		queue_delayed_work(system_percpu_wq, &ec->soc_tj_work, EC_SOC_TJ_TEMP_POLL_JIFFIES);
++		if (qcom_ec_tj_keepalive(ec)) {
++			/* Leave a modern standby state left over from shutdown */
++			mutex_lock(&ec->io_lock);
++			ret = i2c_smbus_write_byte_data(client, EC_MODERN_STANDBY_CMD,
++							EC_MODERN_STANDBY_EXIT);
++			mutex_unlock(&ec->io_lock);
++			if (ret)
++				dev_warn(dev, "Failed to send modern standby exit: %d\n", ret);
++
++			/*
++			 * From the first report on the feed must never stop, so
++			 * the module can no longer be unloaded (no forced unload
++			 * either, unbind is suppressed for the whole driver).
++			 */
++			__module_get(THIS_MODULE);
++			dev_info(dev, "Reporting SoC Tj to the EC, module pinned\n");
++		}
++
++		queue_delayed_work(ec->tj_wq, &ec->soc_tj_work, EC_SOC_TJ_TEMP_POLL_JIFFIES);
+ 	}
+ 
+ 	if (ec->thermal_cap.fan_cnt == 0) {
+@@ -1455,8 +1555,16 @@ static int qcom_ec_probe(struct i2c_client *client)
+ 		return 0;
+ 	}
+ 
+-	if (ec->lut_cfg && ec->lut_cfg->fw_fan_curve)
+-		return qcom_ec_hwmon_register(ec);
++	if (ec->lut_cfg && ec->lut_cfg->fw_fan_curve) {
++		/*
++		 * Must not fail past this point on a Tj keepalive EC: devm
++		 * cleanup would stop the feed.
++		 */
++		ret = qcom_ec_hwmon_register(ec);
++		if (ret)
++			dev_warn(dev, "Failed to register hwmon: %d\n", ret);
++		return 0;
++	}
+ 
+ 	ec->ec_cdev = devm_kcalloc(dev, ec->thermal_cap.fan_cnt, sizeof(*ec->ec_cdev), GFP_KERNEL);
+ 	if (!ec->ec_cdev)
+@@ -1500,6 +1608,10 @@ static void qcom_ec_remove(struct i2c_client *client)
+ {
+ 	struct qcom_ec *ec = i2c_get_clientdata(client);
+ 
++	/* Only reachable on probe errors or adapter removal for keepalive ECs */
++	if (qcom_ec_tj_keepalive(ec) && ec->tj_armed)
++		dev_crit(&client->dev, "EC loses its SoC Tj feed, expect full speed fans and a reset\n");
++
+ 	if (qcom_ec_owns_fans(ec)) {
+ 		complete_all(&ec->calib_abort);
+ 		disable_work_sync(&ec->fan_calib_work);
+@@ -1542,9 +1654,12 @@ static struct i2c_driver qcom_ec_i2c_driver = {
+ 		.name = "qcom-hamoa-ec",
+ 		.of_match_table = qcom_ec_of_match,
+ 		.pm = &qcom_ec_pm_ops,
++		/* Unbinding would stop the SoC Tj feed, see tj_keepalive */
++		.suppress_bind_attrs = true,
+ 	},
+ 	.probe = qcom_ec_probe,
+ 	.remove = qcom_ec_remove,
++	.shutdown = qcom_ec_shutdown,
+ 	.id_table = qcom_ec_i2c_id_table,
+ };
+ module_i2c_driver(qcom_ec_i2c_driver);

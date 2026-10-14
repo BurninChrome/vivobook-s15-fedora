@@ -1,0 +1,57 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# Apply the Vivobook S 15 overlay to the stock DTB of kernel KVER and write
+# the result into the .dtbauto section of /boot/vmlinuz-KVER (stubble UKI).
+# Usage: apply-dtb KVER
+set -euo pipefail
+
+KVER="$1"
+LIB="$(dirname "$(readlink -f "$0")")"
+DATA=${VIVOBOOK_S15_DATADIR:-@DATADIR@/vivobook-s15}
+CONF=/etc/vivobook-s15.conf
+IMG="/boot/vmlinuz-$KVER"
+STOCK="/boot/dtb-$KVER/qcom/x1e80100-asus-vivobook-s15.dtb"
+[ -f "$STOCK" ] || STOCK="/usr/lib/modules/$KVER/dtb/qcom/x1e80100-asus-vivobook-s15.dtb"
+
+EXPERIMENTAL_EC=no
+# shellcheck source=/dev/null
+[ -f "$CONF" ] && . "$CONF"
+DTBO="$DATA/vivobook-s15.dtbo"
+[ "$EXPERIMENTAL_EC" = yes ] && DTBO="$DATA/vivobook-s15-experimental.dtbo"
+
+if [ ! -f "$IMG" ] || [ ! -f "$STOCK" ]; then
+	echo "vivobook-s15: $IMG or the DTB for $KVER is missing, skipping"
+	exit 0
+fi
+
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+
+fdtoverlay -i "$STOCK" -o "$T/merged.dtb" "$DTBO"
+# Symbols are only needed to apply the overlay; without them the DTB fits.
+for n in /__symbols__ /__fixups__ /__local_fixups__; do
+	fdtput -r "$T/merged.dtb" "$n" 2>/dev/null || true
+done
+dtc -q -I dtb -O dtb -o "$T/final.dtb" "$T/merged.dtb"
+
+# Skip only if the image already carries exactly this DTB.
+if python3 - "$IMG" "$T/final.dtb" "$LIB/patch-vmlinuz-dtb.py" <<'PY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("pvd", sys.argv[3])
+pvd = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pvd)
+img = open(sys.argv[1], "rb").read()
+dtb = open(sys.argv[2], "rb").read()
+targets = pvd.find_targets(img)
+same = bool(targets) and all(img[s["rawptr"]:s["rawptr"] + len(dtb)] == dtb for s, _, _ in targets)
+sys.exit(0 if same else 1)
+PY
+then
+	echo "vivobook-s15: $IMG already has the current DTB ($(basename "$DTBO"))"
+	exit 0
+fi
+
+python3 "$LIB/patch-vmlinuz-dtb.py" --vmlinuz "$IMG" --dtb "$T/final.dtb" --yes
+restorecon "$IMG" 2>/dev/null || true
+echo "vivobook-s15: $IMG updated with $(basename "$DTBO")"
