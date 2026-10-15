@@ -20,7 +20,7 @@ own container storage or as a file on your own USB stick.
 | `fetch-local.sh` | fills `local/firmware` and `local/logo` (runs the tools in a Fedora container, no root) |
 | `build-kernel.sh` | builds `kernel-vivobook` in a Fedora container into `local/rpms` (hours) |
 | `kargs.d/10-vivobook-s15.toml` | kernel arguments applied by `bootc switch` / `bootc upgrade` |
-| `vivobook-s15.ks` | kickstart for a fresh installation from a USB stick |
+| `vivobook-s15.ks` | kickstart for a fresh installation from a USB stick (finds the OCI archive on the stick in `%pre`) |
 | `local/` | **git-ignored** inputs: `firmware/`, `logo/`, `rpms/` |
 
 ## Build options
@@ -78,18 +78,24 @@ build, once it exists) before the image build.
 Usually simpler: install stock Fedora Silverblue 45 and switch
 ([../docs/install.md](../docs/install.md)). To install the image directly:
 
-```bash
-sudo image/build.sh --oci-archive /var/tmp/vivobook/vivobook-s15-silverblue-45.oci.tar
-# mkksiso (lorax) in a Fedora container; the ISO is the Fedora 45 aarch64 Everything netinst
-podman run --rm -v /var/tmp/vivobook:/w:Z -v "$PWD/image:/ks:ro,Z" registry.fedoraproject.org/fedora:45 \
-    bash -c 'dnf -y -q install lorax xorriso && mkdir -p /w/add/vivobook && mv /w/*.oci.tar /w/add/vivobook/ &&
-             mkksiso --ks /ks/vivobook-s15.ks --add /w/add/vivobook /w/Fedora-Everything-netinst-aarch64-45.iso /w/vivobook-s15.iso'
-```
+1. Write the official Fedora Silverblue 45 aarch64 ISO to a USB stick with a
+   writable file system (e.g. Fedora Media Writer), so that its label stays
+   `Fedora-45-Silverblue-aarch64`.
+2. Build the archive and copy it with the kickstart into `vivobook/` on the stick:
 
-Write `vivobook-s15.iso` to a USB stick, boot it, and finish the remaining
-steps (disk, user) in Anaconda. After the first boot, build the image once
-with `--switch`, so that later updates come from `containers-storage` and not
-from the archive on the stick.
+   ```bash
+   sudo image/build.sh --oci-archive /var/tmp/vivobook-s15-silverblue-45.oci.tar
+   mkdir -p /run/media/$USER/Fedora-45-Silverblue-aarch64/vivobook
+   cp /var/tmp/vivobook-s15-silverblue-45.oci.tar image/vivobook-s15.ks \
+      /run/media/$USER/Fedora-45-Silverblue-aarch64/vivobook/
+   ```
+
+3. Boot the stick, press `e` on the install entry in GRUB and append
+   `inst.ks=hd:LABEL=Fedora-45-Silverblue-aarch64:/vivobook/vivobook-s15.ks`
+   to the `linux` line. The `%pre` section finds the archive wherever the
+   installer mounted the stick. Set language, disk and user in Anaconda as usual.
+4. After the first boot, build the image once with `--switch`, so that later
+   updates come from `containers-storage` and not from the archive on the stick.
 
 ## Checks
 
