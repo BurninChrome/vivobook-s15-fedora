@@ -14,6 +14,7 @@
 0408-platform-arm64-qcom-hamoa-ec-Never-starve-the-ASUS-E.patch
 0409-platform-arm64-qcom-hamoa-ec-Defer-probe-until-the-t.patch
 0410-platform-arm64-qcom-hamoa-ec-Optionally-report-the-h.patch
+0411-platform-arm64-qcom-hamoa-ec-Always-restart-the-Tj-f.patch
 0500-usb-typec-mux-ps883x-handle-DP-pin-F-and-wait-after-config-writes.patch
 0601-ASoC-codecs-lpass-wsa-macro-revert-PM-clock-framework-conversion.patch
 0602-ASoC-codecs-lpass-rx-macro-revert-PM-clock-framework-conversion.patch

@@ -16,7 +16,7 @@ path = [
   "packaging/**", "hooks/*.path", "hooks/*.service", "hooks/*.conf", "hooks/README.md",
   "kernel/README.md", "kernel/config/**", "kernel/patches/series", "overlay/README.md",
   "overlay/include/VERSION", "tools/README.md", "userspace/**/README.md",
-  "userspace/**/*.service", "userspace/**/*.timer", "userspace/**/*.plymouth",
+  "userspace/**/*.service", "userspace/**/*.timer", "userspace/**/*.plymouth", "userspace/suspend/*.conf",
   "userspace/howdy/video_capture-camss.patch",
 ]
 precedence = "aggregate"

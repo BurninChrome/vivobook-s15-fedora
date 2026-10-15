@@ -7,7 +7,7 @@ numbers, MAC addresses, network names and user names.
 
 | Model | SoC | BIOS | RAM | Fedora | Kernel | Battery | Audio | Mics | Camera | IR + Howdy | Fans (EC) | Suspend | Reporter |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| S5507QAD | X1E-78-100 | 367 | 32 GB | 45 | 7.3.0 vivobook3 | yes | yes | yes | yes | yes | experimental | testing | maintainer |
+| S5507QAD | X1E-78-100 | 367 | 32 GB | 45 | 7.3.0 vivobook5 | yes | yes | yes | yes | yes | experimental | yes (s2idle) | maintainer |
 
 ## Known differences between variants
 

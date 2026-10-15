@@ -1,0 +1,101 @@
+From 761d6afd1369c5b6e0bfe262e713ee451c3c0a8c Mon Sep 17 00:00:00 2001
+From: Kacper Goc <11682528+BurninChrome@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 08:48:15 +0200
+Subject: [PATCH] platform: arm64: qcom-hamoa-ec: Always restart the Tj feed on
+ resume
+
+If modern standby exit failed on resume, qcom_ec_resume() returned
+before re-enabling the SoC Tj work, leaving the system running without
+Tj reports; the ASUS Vivobook S 15 EC then resets the machine about two
+minutes later. Restart the feed first and only then report the error.
+
+Also retry modern standby enter/exit the same way as other EC commands:
+the EC NACKs while busy, and a single NACK aborted suspend (which
+userspace retries endlessly) or hit the resume path above.
+
+Assisted-by: LLM (Claude Opus 5.5)
+---
+ drivers/platform/arm64/qcom-hamoa-ec.c | 48 +++++++++++++++++++-------
+ 1 file changed, 35 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/platform/arm64/qcom-hamoa-ec.c b/drivers/platform/arm64/qcom-hamoa-ec.c
+index 45bb51173..f41bbc4fe 100644
+--- a/drivers/platform/arm64/qcom-hamoa-ec.c
++++ b/drivers/platform/arm64/qcom-hamoa-ec.c
+@@ -1282,27 +1282,52 @@ static void qcom_ec_fan_calib_work_fn(struct work_struct *work)
+ 	qcom_ec_update_profile_from_power_supply(ec);
+ }
+ 
++/*
++ * Modern standby enter/exit, retried: the EC NACKs while busy and a single
++ * failure would abort suspend (enter) or, worse, leave the Tj feed stopped
++ * after resume (exit).
++ */
++static int qcom_ec_modern_standby(struct qcom_ec *ec, u8 state)
++{
++	int ret = 0;
++
++	for (int i = 0; i < EC_I2C_NACK_MAX_ATTEMPTS; i++) {
++		mutex_lock(&ec->io_lock);
++		ret = i2c_smbus_write_byte_data(ec->client, EC_MODERN_STANDBY_CMD, state);
++		mutex_unlock(&ec->io_lock);
++		if (!ret)
++			return 0;
++		msleep(EC_I2C_NACK_RETRY_DELAY_MS);
++	}
++
++	dev_err(&ec->client->dev, "Failed to send modern standby %s: %d\n",
++		state == EC_MODERN_STANDBY_ENTER ? "enter" : "exit", ret);
++	return ret;
++}
++
+ static int qcom_ec_resume(struct device *dev)
+ {
+ 	struct i2c_client *client = to_i2c_client(dev);
+ 	struct qcom_ec *ec = i2c_get_clientdata(client);
+ 	int ret;
+ 
+-	mutex_lock(&ec->io_lock);
+-	ret = i2c_smbus_write_byte_data(client, EC_MODERN_STANDBY_CMD,
+-					EC_MODERN_STANDBY_EXIT);
+-	mutex_unlock(&ec->io_lock);
++	ret = qcom_ec_modern_standby(ec, EC_MODERN_STANDBY_EXIT);
++
++	/*
++	 * Restart the Tj feed even if MS exit failed: an armed EC resets the
++	 * machine about two minutes after the last report.
++	 */
++	if (ec->tj_running) {
++		enable_delayed_work(&ec->soc_tj_work);
++		queue_delayed_work(ec->tj_wq, &ec->soc_tj_work, 0);
++	}
++
+ 	if (ret)
+ 		return ret;
+ 
+ 	if (qcom_ec_owns_fans(ec) && !ec->calib_done)
+ 		queue_work(system_long_wq, &ec->fan_calib_work);
+ 
+-	if (ec->tj_running) {
+-		enable_delayed_work(&ec->soc_tj_work);
+-		/* Report right away, the EC watchdog runs again after MS exit */
+-		queue_delayed_work(ec->tj_wq, &ec->soc_tj_work, 0);
+-	}
+ 	return 0;
+ }
+ 
+@@ -1329,10 +1354,7 @@ static int qcom_ec_suspend(struct device *dev)
+ 		qcom_ec_send_soc_tj_temp(ec);
+ 	}
+ 
+-	mutex_lock(&ec->io_lock);
+-	ret = i2c_smbus_write_byte_data(client, EC_MODERN_STANDBY_CMD,
+-					EC_MODERN_STANDBY_ENTER);
+-	mutex_unlock(&ec->io_lock);
++	ret = qcom_ec_modern_standby(ec, EC_MODERN_STANDBY_ENTER);
+ 
+ 	if (ret && ec->tj_running) {
+ 		/* Suspend is aborted and our resume will not run: keep feeding */
+-- 
+2.56.0
+

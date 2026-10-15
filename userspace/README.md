@@ -7,6 +7,7 @@
 | [`keyboard/`](keyboard/) | HID-BPF alternative to the `hid-asus-ec` kernel driver, for stock kernels | by hand (README) | yes |
 | [`wifi/`](wifi/) | ath12k: power save off, stall watchdog | `install.sh` / `uninstall.sh` | yes |
 | [`plymouth/`](plymouth/) | centred boot splash with scale 2; the ASUS logo is extracted locally, never stored here | `install.sh` / `uninstall.sh` | yes |
+| [`suspend/`](suspend/) | s2idle with the EC driver: `allow_suspend=1`, s2idle as default sleep mode | by hand (README) | only with the EC driver |
 | [`boot/`](boot/) | boot time fixes: `systemd.tpm2_wait=0`, NetworkManager iSCSI dispatcher mask | by hand (README) | yes |
 
 The install scripts accept `--dry-run` where they change system files.

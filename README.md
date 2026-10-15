@@ -24,7 +24,7 @@ patches from [`kernel/patches/`](kernel/patches/).
 | Front camera (OV02C10) | works | patched kernel (CCI fix), overlay `20-camera-rgb`, libcamera, WirePlumber rule | image rotated 180° in DT |
 | IR camera (HM1092) + IR LED, Howdy | works | kernel patches, overlay `30-camera-ir`, Howdy patch | face unlock for sudo and GDM |
 | Fan control via EC (`qcom-hamoa-ec`) | experimental, off by default | kernel patches, `EXPERIMENTAL_EC=yes` | **read [docs/ec-fan-control.md](docs/ec-fan-control.md)** |
-| Suspend (s2idle) | in testing | kernel 7.3 | blocked while the EC driver feeds Tj |
+| Suspend (s2idle) | works | kernel 7.3; with the EC driver patches 0401-0411 and [`userspace/suspend`](userspace/suspend/) | lid, keyboard, touchpad, power button wake; battery drain not measured yet |
 | Wi-Fi (WCN7850, ath12k) | works, with watchdog | `userspace/wifi` | rare data path stall on 7.3, see docs |
 | Bluetooth, GPU | works | firmware | |
 | Hardware video decode (iris) | works | firmware, patched kernel (video clock controller) | |

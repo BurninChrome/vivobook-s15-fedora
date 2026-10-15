@@ -15,6 +15,7 @@ Config options: `config/kernel-local`.
 | 0408 | qcom-hamoa-ec: Never starve the ASUS EC of SoC Tj | maintainer | not posted |
 | 0409 | qcom-hamoa-ec: Defer probe until the tsens sensors are bound | maintainer | not posted |
 | 0410 | qcom-hamoa-ec: Optionally report the hottest zone as SoC Tj | maintainer | not posted |
+| 0411 | qcom-hamoa-ec: Always restart the Tj feed on resume | maintainer | not posted |
 | 0500 | usb: typec: mux: ps883x: handle DP pin F and wait after config writes | Jens Glathe | jglathe tree |
 | 0601-0604 | ASoC: codecs: lpass-{wsa,rx,tx,va}-macro: revert PM clock framework conversion | maintainer | not posted (downstream workaround) |
 

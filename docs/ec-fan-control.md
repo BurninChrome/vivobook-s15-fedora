@@ -30,11 +30,11 @@ the `tsens` zones exist, and pins itself (it cannot be unloaded with `rmmod`).
 - Do not blacklist or unload `qcom_hamoa_ec` while the system runs.
 - The overlay node `40-ec.dtsi` alone is harmless: without the 04xx patches
   nothing binds to it and the EC keeps its default curve.
-- **Suspend is blocked** while the EC driver feeds Tj: it is not yet known
-  whether modern standby stops the EC watchdog, and a laptop that resets in
-  a bag is worse than one that does not sleep. The module parameter
-  `qcom_hamoa_ec.allow_suspend=1` lifts the block for testing; report the
-  result.
+- **Suspend is refused by default** while the EC driver feeds Tj. With
+  `qcom_hamoa_ec.allow_suspend=1` the driver sends "modern standby enter"
+  (23 01) before sleeping and "modern standby exit" (23 00) after waking;
+  this disarms the EC watchdog (tested up to 4 minutes of s2idle, no reset).
+  Needs patch 0411. Setup: [userspace/suspend](../userspace/suspend/).
 - If you see unexplained reboots, report them with the output of
   `journalctl -b -1 -k | grep -i -E 'hamoa|tsens|thermal'`.
 

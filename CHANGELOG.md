@@ -7,6 +7,12 @@ Releases are tagged `vYYYY.MM.N`. The kernel package is versioned separately
 
 ## [Unreleased]
 
+### Added
+- Suspend (s2idle) with the experimental EC driver: patch 0411 (the Tj feed
+  always restarts on resume, retries for modern standby enter/exit) and
+  `userspace/suspend` (`allow_suspend=1`, s2idle). Tested: 12 suspends up to
+  4 minutes, lid/keyboard/touchpad/power button wake, no EC reset.
+
 ### Changed
 - Kernel: patches 0601-0604 revert the pm_clk conversion of the LPASS
   WSA/RX/TX/VA macros, fixing the 7.3 SoundWire regression (no sound after
