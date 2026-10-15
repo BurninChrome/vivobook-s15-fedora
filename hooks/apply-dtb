@@ -2,17 +2,31 @@
 # SPDX-License-Identifier: MIT
 #
 # Apply the Vivobook S 15 overlay to the stock DTB of kernel KVER and write
-# the result into the .dtbauto section of /boot/vmlinuz-KVER (stubble UKI).
+# the result into the .dtbauto section of the kernel image (stubble UKI).
 # Usage: apply-dtb KVER
+#
+# Kernel image:
+#   /boot/vmlinuz-KVER             Fedora Workstation (kernel-install layout)
+#   /usr/lib/modules/KVER/vmlinuz  Silverblue image build (bootc/ostree layout);
+#                                  also writes /usr/lib/modules/KVER/devicetree,
+#                                  which ostree copies next to the kernel
+# On a booted Silverblue system /usr is read-only: change the image instead
+# (image/README.md).
 set -euo pipefail
 
 KVER="$1"
 LIB="$(dirname "$(readlink -f "$0")")"
 DATA=${VIVOBOOK_S15_DATADIR:-@DATADIR@/vivobook-s15}
 CONF=/etc/vivobook-s15.conf
+MODDIR="/usr/lib/modules/$KVER"
 IMG="/boot/vmlinuz-$KVER"
+IMAGE_LAYOUT=no
+if [ ! -f "$IMG" ] && [ -f "$MODDIR/vmlinuz" ]; then
+	IMG="$MODDIR/vmlinuz"
+	IMAGE_LAYOUT=yes
+fi
 STOCK="/boot/dtb-$KVER/qcom/x1e80100-asus-vivobook-s15.dtb"
-[ -f "$STOCK" ] || STOCK="/usr/lib/modules/$KVER/dtb/qcom/x1e80100-asus-vivobook-s15.dtb"
+[ -f "$STOCK" ] || STOCK="$MODDIR/dtb/qcom/x1e80100-asus-vivobook-s15.dtb"
 
 EXPERIMENTAL_EC=no
 # shellcheck source=/dev/null
@@ -24,6 +38,10 @@ if [ ! -f "$IMG" ] || [ ! -f "$STOCK" ]; then
 	echo "vivobook-s15: $IMG or the DTB for $KVER is missing, skipping"
 	exit 0
 fi
+if [ ! -w "$IMG" ] || { [ -e /run/ostree-booted ] && [ "$IMAGE_LAYOUT" = yes ]; }; then
+	echo "vivobook-s15: $IMG is read-only (Silverblue): the overlay is applied when the image is built, see image/README.md" >&2
+	exit 1
+fi
 
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
@@ -34,6 +52,13 @@ for n in /__symbols__ /__fixups__ /__local_fixups__; do
 	fdtput -r "$T/merged.dtb" "$n" 2>/dev/null || true
 done
 dtc -q -I dtb -O dtb -o "$T/final.dtb" "$T/merged.dtb"
+
+# ostree installs "devicetree" from the module directory next to the kernel
+# and adds it to the boot entry. stubble uses its .dtbauto section either way;
+# the copy keeps both identical.
+if [ "$IMAGE_LAYOUT" = yes ]; then
+	install -m 0644 "$T/final.dtb" "$MODDIR/devicetree"
+fi
 
 # Skip only if the image already carries exactly this DTB.
 if python3 - "$IMG" "$T/final.dtb" "$LIB/patch-vmlinuz-dtb.py" <<'PY'
@@ -52,6 +77,9 @@ then
 	exit 0
 fi
 
-python3 "$LIB/patch-vmlinuz-dtb.py" --vmlinuz "$IMG" --dtb "$T/final.dtb" --yes
+backup=()
+# An image build needs no backup: the stock kernel stays in the base image.
+[ "$IMAGE_LAYOUT" = yes ] && backup=(--no-backup)
+python3 "$LIB/patch-vmlinuz-dtb.py" --vmlinuz "$IMG" --dtb "$T/final.dtb" --yes "${backup[@]}"
 restorecon "$IMG" 2>/dev/null || true
 echo "vivobook-s15: $IMG updated with $(basename "$DTBO")"

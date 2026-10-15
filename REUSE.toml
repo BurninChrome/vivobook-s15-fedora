@@ -18,6 +18,7 @@ path = [
   "overlay/include/VERSION", "tools/README.md", "userspace/**/README.md",
   "userspace/**/*.service", "userspace/**/*.timer", "userspace/**/*.plymouth", "userspace/suspend/*.conf",
   "userspace/howdy/video_capture-camss.patch",
+  "image/README.md", ".containerignore",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "The vivobook-s15-fedora contributors"

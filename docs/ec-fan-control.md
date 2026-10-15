@@ -3,8 +3,10 @@
 The S5507QAD uses the same I2C embedded controller protocol as Qualcomm's
 reference designs, driven by `drivers/platform/arm64/qcom-hamoa-ec.c`
 (mainline since 7.2). With the extra patches in `kernel/patches/`
-(04xx) **and** `EXPERIMENTAL_EC=yes` in `/etc/vivobook-s15.conf` (which adds
-the EC node to the device tree; default: off) the driver:
+(04xx) **and** `EXPERIMENTAL_EC=yes` (which adds the EC node to the device
+tree; default: off) the driver works. On Silverblue the setting is a build
+option of the image, `sudo image/build.sh --ec yes --switch`; on Workstation it
+lives in `/etc/vivobook-s15.conf`. The driver:
 
 - reports both fan speeds in RPM (`hwmon`),
 - switches the fan profile with the power source,
@@ -28,6 +30,8 @@ the `tsens` zones exist, and pins itself (it cannot be unloaded with `rmmod`).
 ## Rules
 
 - Do not blacklist or unload `qcom_hamoa_ec` while the system runs.
+- To turn it off on Silverblue, build with `--ec no` and reboot into that
+  image; the previous image (with the EC node) stays as the rollback entry.
 - The overlay node `40-ec.dtsi` alone is harmless: without the 04xx patches
   nothing binds to it and the EC keeps its default curve.
 - **Suspend is refused by default** while the EC driver feeds Tj. With

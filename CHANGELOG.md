@@ -8,6 +8,21 @@ Releases are tagged `vYYYY.MM.N`. The kernel package is versioned separately
 ## [Unreleased]
 
 ### Added
+- **Fedora Silverblue 45** as the main target: `image/` builds a local
+  bootable container image (`Containerfile`, `build.sh --switch`,
+  `fetch-local.sh`, `build-kernel.sh`, `kargs.d`, kickstart) with the patched
+  kernel, the stubble UKI from `kernel-uki-dtbloader` as
+  `/usr/lib/modules/<kver>/vmlinuz` with the overlay merged in, firmware, UCM,
+  suspend, Wi-Fi watchdog, Plymouth theme and Howdy. Updates and rollback go
+  through `bootc`. Installation: `docs/install.md`; the Workstation guide moved
+  to `docs/install-workstation.md`.
+- `apply-dtb` handles the ostree layout (`/usr/lib/modules/<kver>/vmlinuz`,
+  plus `devicetree`) and refuses to touch a booted read-only image;
+  `patch-vmlinuz-dtb.py --no-backup`.
+- `install-howdy.sh image`, `plymouth/install.sh --image` for the image build;
+  the userspace scripts that change `/usr` refuse to run on a booted image.
+- `tools/selftest.sh` checks the booted image and its kernel arguments.
+- CI builds the image (stock kernel, no firmware).
 - Suspend (s2idle) with the experimental EC driver: patch 0411 (the Tj feed
   always restarts on resume, retries for modern standby enter/exit) and
   `userspace/suspend` (`allow_suspend=1`, s2idle). Tested: 12 suspends up to

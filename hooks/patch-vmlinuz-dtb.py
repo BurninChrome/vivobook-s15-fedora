@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 The x1e-vivobook-s15-linux-audio contributors
 # From https://github.com/bingo1991/qcom-x1e-vivobook-s15 (scripts/), unmodified
-# apart from this header. See LICENSES/MIT.txt.
+# apart from this header and --no-backup (image builds). See LICENSES/MIT.txt.
 """
 Replace the .dtbauto section for this machine inside a stubble-built vmlinuz.
 
@@ -207,6 +207,8 @@ def main():
     p.add_argument("--verify", action="store_true")
     p.add_argument("--restore", action="store_true")
     p.add_argument("--yes", action="store_true")
+    p.add_argument("--no-backup", action="store_true",
+                   help="do not keep a copy of the original image (container image builds)")
     args = p.parse_args()
 
     if args.check:
@@ -254,13 +256,16 @@ def main():
     # matching initrd.img-<kver>.orig-<stamp> does not exist - booting that
     # entry panics with "VFS: Unable to mount root fs on unknown-block(0,0)".
     store = "/var/backups/x1e"
-    if os.path.isdir(os.path.dirname(store)) and os.access(os.path.dirname(store), os.W_OK):
+    if args.no_backup:
+        backup = None
+    elif os.path.isdir(os.path.dirname(store)) and os.access(os.path.dirname(store), os.W_OK):
         os.makedirs(store, exist_ok=True)
         backup = os.path.join(store, os.path.basename(args.vmlinuz) + f".orig-{stamp}")
     else:
         backup = f"{args.vmlinuz}.orig-{stamp}"
-    shutil.copy2(args.vmlinuz, backup)
-    print(f"backup     : {backup}")
+    if backup:
+        shutil.copy2(args.vmlinuz, backup)
+        print(f"backup     : {backup}")
 
     out = bytearray(img)
     for s, _, _ in targets:

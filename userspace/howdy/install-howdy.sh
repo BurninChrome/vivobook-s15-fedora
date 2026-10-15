@@ -6,6 +6,10 @@
 #
 #   install-howdy.sh install          step 1: COPR repository, packages, camss reader,
 #                                     udev rule, config.ini, SELinux module. NO PAM changes.
+#                                     Fedora Workstation only; on Silverblue step 1 is part
+#                                     of the image (WITH_HOWDY=yes, image/README.md).
+#   install-howdy.sh image            step 1 inside a container image build (no udevadm,
+#                                     udev rule in /usr/lib/udev/rules.d, no backups)
 #   install-howdy.sh add USER         record a face model for USER (howdy add)
 #   install-howdy.sh test-cam USER    one recognition attempt without PAM (uses compare.py
 #                                     like pam_howdy does; "howdy test" needs X)
@@ -34,9 +38,12 @@ if [ $DRY -eq 1 ]; then
 	exit 0
 fi
 [ "$(id -u)" = 0 ] || { echo "run as root: sudo $0 $*" >&2; exit 1; }
-mkdir -p "$STATE"
+IMAGE=0
+[ "${1:-}" = image ] && IMAGE=1 && UDEV=/usr/lib/udev/rules.d/70-howdy-ir.rules
+[ $IMAGE -eq 1 ] || mkdir -p "$STATE"
 
 backup() {	# backup FILE: one-time copy of the original to $STATE/orig/
+	[ $IMAGE -eq 1 ] && return 0
 	local f=$1 b=$STATE/orig$1
 	{ [ -e "$b" ] || [ -e "$b.absent" ]; } && return 0
 	mkdir -p "$(dirname "$b")"
@@ -46,6 +53,11 @@ backup() {	# backup FILE: one-time copy of the original to $STATE/orig/
 site_file() { rpm -ql howdy | grep '/howdy/recorders/video_capture.py$' | head -1; }
 
 do_install() {
+	if [ $IMAGE -eq 0 ] && [ -e /run/ostree-booted ]; then
+		echo "Silverblue: /usr is read-only. Build the image with WITH_HOWDY=yes (image/README.md)," >&2
+		echo "boot it, then continue with: sudo $0 add USER" >&2
+		exit 1
+	fi
 	# 1. COPR starfish/howdy-beta: the only repository with fedora-45-aarch64 builds
 	#    (howdy 3.0.0, dlib 20.0). Read its spec before trusting it.
 	backup "$REPO"
@@ -61,7 +73,8 @@ repo_gpgcheck=0
 enabled=1
 enabled_metadata=1
 R
-	dnf -y install howdy python3-numpy v4l-utils python3-pillow checkpolicy policycoreutils
+	dnf -y install howdy python3-numpy v4l-utils python3-pillow checkpolicy policycoreutils patch
+	# The image keeps the repository file but not the dnf cache.
 
 	# 2. camss reader + the 5-line reader selection in video_capture.py
 	local vc rec
@@ -69,7 +82,7 @@ R
 	rec=$(dirname "$vc")
 	backup "$vc"
 	install -m 0644 "$HERE/camss_reader.py" "$rec/camss_reader.py"
-	echo "$rec/camss_reader.py" > "$STATE/camss_reader.path"
+	[ $IMAGE -eq 1 ] || echo "$rec/camss_reader.py" > "$STATE/camss_reader.path"
 	if ! grep -q 'recording_plugin == "camss"' "$vc"; then
 		patch --no-backup-if-mismatch -p2 -d "$rec" < "$HERE/video_capture-camss.patch"
 	fi
@@ -77,8 +90,10 @@ R
 
 	# 3. udev: /dev/howdy-ir -> msm_vfe1_video0
 	install -m 0644 "$HERE/70-howdy-ir.rules" "$UDEV"
-	udevadm control --reload
-	udevadm trigger --subsystem-match=video4linux || true
+	if [ $IMAGE -eq 0 ]; then
+		udevadm control --reload
+		udevadm trigger --subsystem-match=video4linux || true
+	fi
 
 	# 4. config.ini (comments kept; only keys of [video] and [core] are changed)
 	backup "$CONF"
@@ -122,6 +137,7 @@ P
 	rm -rf "$t"
 	semodule -l | grep -w howdy_camss
 
+	[ $IMAGE -eq 1 ] && return 0
 	echo "STEP 1 DONE. Next:"
 	echo "  sudo $0 add USER        (look at the camera for about 5 s)"
 	echo "  sudo $0 test-cam USER   (one recognition attempt)"
@@ -208,9 +224,9 @@ do_pam() {
 cmd=${1:-}
 shift || true
 case $cmd in
-	install) do_install ;;
+	install|image) do_install ;;
 	add) do_add "$@" ;;
 	test-cam) do_test "$@" ;;
 	pam) do_pam "$@" ;;
-	*) sed -n '4,20p' "$0"; exit 2 ;;
+	*) sed -n '4,24p' "$0"; exit 2 ;;
 esac

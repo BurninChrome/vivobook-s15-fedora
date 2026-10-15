@@ -1,5 +1,10 @@
 # Boot time after the LUKS password
 
+> **Silverblue:** `systemd.tpm2_wait=0` comes from `image/kargs.d/` and the
+> image masks the `04-iscsi` dispatcher script if the base image has it.
+> `grubby` and `/etc/kernel/cmdline` do not apply; for a one-off change use
+> `sudo rpm-ostree kargs --append=... / --delete=...`.
+
 Measured on Fedora 45: about 95 s from the LUKS password to the GDM screen,
 7.9 s after the two fixes below. Both are safe to undo.
 

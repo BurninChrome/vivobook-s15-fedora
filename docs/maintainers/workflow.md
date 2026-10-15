@@ -30,4 +30,5 @@ Hardware reports are summarised in `HARDWARE.md` and then closed.
 |---|---|---|
 | `vivobook-s15-support` (noarch) | Fedora COPR, from this repository (SCM source, `make srpm`) | tag push (webhook) |
 | `kernel-vivobook` | Fedora COPR, aarch64 builders, from `packaging/kernel/` | manual `copr-cli build` or tag `kernel-*` |
-| CI checks | GitHub Actions (`ubuntu-24.04-arm`) | push, pull request |
+| CI checks, image build test (stock kernel, no firmware) | GitHub Actions (`ubuntu-24.04-arm`) | push, pull request |
+| Silverblue image | locally on each laptop (`image/build.sh`), never published: it contains vendor firmware | the user |

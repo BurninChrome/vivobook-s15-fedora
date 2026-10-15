@@ -1,5 +1,9 @@
 # Front camera (OV02C10)
 
+> **Silverblue:** the WirePlumber rule, `libcamera-tools` and `v4l-utils` are
+> in the image. The gain helper is a user service and installs as described
+> below.
+
 The camera works through libcamera's "simple" pipeline with the software ISP
 (libcamera 0.7.2 in Fedora 45), PipeWire and the camera portal: GNOME Camera
 (Snapshot), Firefox and Chromium (enable `chrome://flags/#enable-webrtc-pipewire-camera`).

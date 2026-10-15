@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+#
+# Fedora Silverblue 45 image for the ASUS Vivobook S 15 (S5507QAD).
+# Build with image/build.sh from the repository root; see image/README.md.
+#
+# The image contains vendor firmware (and, optionally, the ASUS logo) from
+# image/local/. Their licenses do not allow redistribution: keep the image
+# local, never push it to a public registry.
+
+ARG BASE_IMAGE=quay.io/fedora/fedora-silverblue:45
+
+# Stage 1: build the overlays and stage the support files (make install, the
+# same paths as the RPM in packaging/copr/).
+FROM registry.fedoraproject.org/fedora:45 AS support
+RUN dnf -y install --setopt=install_weak_deps=False cpp dtc make python3 && dnf clean all
+COPY . /src
+WORKDIR /src
+RUN make clean && make install DESTDIR=/out PREFIX=/usr LIBEXECDIR=/usr/libexec DATADIR=/usr/share \
+        DOCDIR=/usr/share/doc/vivobook-s15-support SYSCONFDIR=/etc \
+        KERNELINSTALLDIR=/usr/lib/kernel/install.d UNITDIR=/usr/lib/systemd/system \
+        UDEVRULESDIR=/usr/lib/udev/rules.d WPCONFDIR=/usr/share/wireplumber/wireplumber.conf.d && \
+    # Not needed in an image: kernels and alsa-ucm only change when the image is
+    # rebuilt, and image/build-root.sh applies both at that time.
+    rm -f /out/usr/lib/kernel/install.d/30-vivobook-s15.install \
+          /out/usr/lib/systemd/system/vivobook-s15-ucm.path \
+          /out/usr/lib/systemd/system/vivobook-s15-ucm.service
+
+# Stage 2: the bootable image.
+FROM ${BASE_IMAGE}
+ARG EXPERIMENTAL_EC=no
+ARG WITH_HOWDY=yes
+ARG WITH_WIFI=yes
+ARG EXTRA_PACKAGES=""
+ARG ALLOW_NO_FIRMWARE=no
+ARG IMAGE_VERSION=""
+
+COPY --from=support /out/ /
+RUN --mount=type=bind,source=.,target=/run/vivobook-src,ro \
+    EXPERIMENTAL_EC="$EXPERIMENTAL_EC" WITH_HOWDY="$WITH_HOWDY" WITH_WIFI="$WITH_WIFI" \
+    EXTRA_PACKAGES="$EXTRA_PACKAGES" ALLOW_NO_FIRMWARE="$ALLOW_NO_FIRMWARE" \
+    bash /run/vivobook-src/image/build-root.sh /run/vivobook-src
+
+LABEL org.opencontainers.image.title="vivobook-s15-silverblue" \
+      org.opencontainers.image.description="Fedora Silverblue 45 for the ASUS Vivobook S 15 (local build, contains vendor firmware)" \
+      org.opencontainers.image.source="https://github.com/BurninChrome/vivobook-s15-fedora" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      containers.bootc="1"
+
+RUN bootc container lint

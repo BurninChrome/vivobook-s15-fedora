@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Kernel arguments of every deployment of the vivobook-s15 image (bootc kargs.d,
+# applied by "bootc switch" and "bootc upgrade").
+# systemd.tpm2_wait=0: no TPM driver on X1E yet, avoids two 90 s waits
+#   (userspace/boot/README.md).
+# plymouth.force-scale=2: splash and LUKS prompt at the right size on the
+#   2880x1620 panel (userspace/plymouth/README.md).
+# Per-machine arguments (root=, rd.luks.uuid=, rootflags=) come from the installer.
+kargs = ["systemd.tpm2_wait=0", "plymouth.force-scale=2"]
+match-architectures = ["aarch64"]

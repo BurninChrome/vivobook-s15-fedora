@@ -77,7 +77,7 @@ if have cam; then
 	if cam -l 2>/dev/null | grep -q 'camera@36'; then pass "libcamera sees the front camera"
 	else fail "libcamera does not list the front camera"; fi
 else
-	warn "libcamera-tools not installed, front camera not checked (dnf install libcamera-tools)"
+	warn "libcamera-tools not installed, front camera not checked"
 fi
 if lsmod | grep -q '^hm1092'; then pass "IR camera driver hm1092 loaded"; else warn "hm1092 not loaded (kernel without patches 0200-0202?)"; fi
 [ -e /dev/howdy-ir ] && pass "/dev/howdy-ir present (Howdy setup)"
@@ -105,8 +105,23 @@ if [ "$pol" -ge 3 ]; then pass "cpufreq: $pol policies"; else fail "cpufreq: $po
 if ls /dev/dri/renderD* >/dev/null 2>&1; then pass "GPU render node"; else fail "no GPU render node"; fi
 if grep -qs 'iris' /sys/class/video4linux/*/name; then pass "video decoder (iris)"; else warn "iris video decoder not found"; fi
 
-# --- hook ---
-if [ -x /usr/lib/kernel/install.d/30-vivobook-s15.install ] || [ -x /etc/kernel/install.d/30-vivobook-s15.install ]; then
+# --- image (Silverblue) or hook (Workstation) ---
+if [ -e /run/ostree-booted ]; then
+	ref=""
+	have rpm-ostree && ref=$(rpm-ostree status --booted 2>/dev/null | sed -n 's/^[●*] *//p' | head -1)
+	case "$ref" in
+		*vivobook-s15*) pass "Silverblue image: $ref" ;;
+		*) warn "booted deployment is not a vivobook-s15 image: ${ref:-unknown} (image/README.md)" ;;
+	esac
+	if [ -f "/usr/lib/modules/$(uname -r)/devicetree" ]; then
+		pass "image carries the merged DTB (/usr/lib/modules/$(uname -r)/devicetree)"
+	else
+		warn "no merged DTB next to the kernel: image not built with image/build-root.sh?"
+	fi
+	for a in systemd.tpm2_wait=0 plymouth.force-scale=2; do
+		grep -qw "$a" /proc/cmdline && pass "kernel argument $a" || warn "kernel argument $a missing (image/kargs.d, bootc switch)"
+	done
+elif [ -x /usr/lib/kernel/install.d/30-vivobook-s15.install ] || [ -x /etc/kernel/install.d/30-vivobook-s15.install ]; then
 	pass "kernel-install hook installed"
 else
 	fail "kernel-install hook missing: future kernels will boot without the overlay"

@@ -1,105 +1,96 @@
-# Installation
+# Installation (Fedora Silverblue 45)
 
-Status: the COPR packages are planned; until they exist, install from this
-repository (manual way below).
+The supported setup is a locally built Silverblue image
+([../image/README.md](../image/README.md)). The mutable Fedora Workstation
+setup is still described in [install-workstation.md](install-workstation.md).
 
 ## Requirements
 
 - ASUS Vivobook S 15 S5507QAD (S5507QA: please file a hardware report),
-- Fedora 45 aarch64 Workstation installed (the stock kernel boots, without
-  audio, cameras and fan control),
-- Secure Boot disabled in the BIOS setup,
-- a working Internet connection and about 2 GB free in `/boot` and `/`.
+- Secure Boot disabled in the BIOS setup (the kernel is not signed),
+- about 15 GB free in `/var` for the build (60 GB more to build the kernel),
+- a Fedora live USB as a fallback.
 
-Keep a Fedora live USB and the stock kernel entry in GRUB as fallbacks.
+## 1. Install stock Fedora Silverblue 45 aarch64
 
-## 1. Firmware
+Install from the official Fedora Silverblue 45 aarch64 ISO. The stock kernel
+boots (no audio, cameras, battery status or fan control yet). Do not layer
+packages with `rpm-ostree install`: `bootc switch` refuses deployments with
+local changes (`rpm-ostree reset` removes them).
 
-See [firmware.md](firmware.md). Reboot and check
-`upower -i /org/freedesktop/UPower/devices/battery_qcom_battmgr_bat`.
-
-## 2. Support package: overlay, hook, UCM, rules
-
-With COPR (planned):
+## 2. Get this repository and the local inputs
 
 ```bash
-sudo dnf copr enable BurninChrome/vivobook-s15
-sudo dnf install vivobook-s15-support
+git clone https://github.com/BurninChrome/vivobook-s15-fedora
+cd vivobook-s15-fedora
+image/fetch-local.sh        # no root: firmware + logo into image/local/ (docs/firmware.md)
 ```
 
-Manually from a checkout of this repository:
-
-```bash
-sudo dnf install dtc cpp make python3
-make                    # builds overlay/build/*.dtbo
-make check              # syntax checks and a test merge with your stock DTB
-sudo make install       # PREFIX=/usr/local; hook in /etc/kernel/install.d
-sudo make apply         # merge the overlay into every installed kernel, restore UCM
-```
-
-`make apply` rewrites the `.dtbauto` section of `/boot/vmlinuz-<version>`
-(see [dtb-delivery.md](dtb-delivery.md)); a backup of each image goes to
-`/var/backups/x1e/`. Future kernels are handled by the kernel-install hook.
+Without Internet access to the ASUS server, copy the six firmware files from
+a Windows installation (`qcom-firmware-extract` in a toolbox) into
+`image/local/firmware/` instead.
 
 ## 3. Kernel
 
-The stock Fedora kernel gives battery, speakers, headphones, microphones,
-Wi-Fi and GPU (with the overlay). Both cameras (CCI power-on fix, HM1092
-driver), hardware video decoding (video clock controller), keyboard backlight
-and Fn keys, and fan control need the patched kernel:
-
 ```bash
-sudo dnf install kernel-vivobook        # planned, same COPR
+image/build-kernel.sh       # no root, several hours; RPMs into image/local/rpms/
 ```
 
-Until then: `packaging/kernel/prepare-srpm.sh` builds the source RPM, and
-`rpmbuild --rebuild` on the laptop builds it (several hours).
+Once the COPR kernel exists, put its six RPMs (`kernel`, `kernel-core`,
+`kernel-modules`, `kernel-modules-core`, `kernel-modules-extra`,
+`kernel-uki-dtbloader`) into
+`image/local/rpms/` instead (`image/fetch-local.sh --rpms DIR`). Skip this step
+to build with the stock kernel first.
 
-## 4. Experimental: EC fan control
-
-Read [ec-fan-control.md](ec-fan-control.md) first. Then:
-
-```bash
-sudo sed -i 's/^EXPERIMENTAL_EC=.*/EXPERIMENTAL_EC=yes/' /etc/vivobook-s15.conf
-sudo /usr/libexec/vivobook-s15/apply-dtb "$(uname -r)"   # /usr/local/libexec for make install
-```
-
-and reboot into a kernel-vivobook kernel.
-
-## 5. Optional
-
-Howdy face unlock ([../userspace/howdy/](../userspace/howdy/)), Wi-Fi
-watchdog ([../userspace/wifi/](../userspace/wifi/)), Plymouth theme
-([../userspace/plymouth/](../userspace/plymouth/)), boot time fixes
-([../userspace/boot/](../userspace/boot/)).
-
-## 6. Check
-
-Reboot, then run `tools/selftest.sh` (no root). It prints PASS/WARN/FAIL for
-firmware, battery, overlay nodes, audio, cameras, keyboard, EC, cpufreq, GPU
-and the hook.
-
-## Migrating from an earlier manual setup ("vivobook-audio")
-
-Early setups installed `/etc/kernel/install.d/30-vivobook-audio.install`,
-`/usr/local/libexec/vivobook-audio/`, `vivobook-audio-ucm.{path,service}`
-and `/etc/udev/rules.d/90-vivobook-lpass-rpm.rules`. Remove them before
-installing this package, otherwise two hooks write the DTB:
+## 4. Build the image and switch to it
 
 ```bash
-sudo systemctl disable --now vivobook-audio-ucm.path
-sudo rm -f /etc/kernel/install.d/30-vivobook-audio.install \
-    /etc/systemd/system/vivobook-audio-ucm.path /etc/systemd/system/vivobook-audio-ucm.service \
-    /etc/udev/rules.d/90-vivobook-lpass-rpm.rules
-sudo rm -rf /usr/local/libexec/vivobook-audio
+sudo image/build.sh --switch
+systemctl reboot
 ```
 
-If the old overlay included the EC node, set `EXPERIMENTAL_EC=yes` before
-`make apply`, otherwise the next DTB comes without it.
+The previous deployment (stock Silverblue) stays in the GRUB menu as the
+fallback. If `bootc switch` is not available or refuses, the same works with
+rpm-ostree:
+
+```bash
+sudo rpm-ostree rebase ostree-unverified-image:containers-storage:localhost/vivobook-s15-silverblue:45
+sudo rpm-ostree kargs --append-if-missing=systemd.tpm2_wait=0 --append-if-missing=plymouth.force-scale=2
+```
+
+## 5. Check
+
+After the reboot: `tools/selftest.sh` (no root) and `bootc status`.
+
+## 6. Optional
+
+- **EC fan control** (experimental): read [ec-fan-control.md](ec-fan-control.md),
+  then `sudo image/build.sh --ec yes --switch`. Suspend support comes with it
+  ([../userspace/suspend/](../userspace/suspend/)).
+- **Howdy face login**: built in by default. Record a face and enable PAM:
+  `sudo userspace/howdy/install-howdy.sh add "$USER"`, then `test-cam`, then
+  `pam` ([../userspace/howdy/README.md](../userspace/howdy/README.md)).
+- **Wi-Fi**: power save off and the watchdog are built in;
+  `sudo userspace/wifi/install.sh --band-24 "<connection>"` still works.
+- **Applications**: Flatpak, or `toolbox` for development tools; rebuild the
+  image with `--packages` only for system components.
+
+## Updates
+
+```bash
+git pull && sudo image/build.sh --switch && systemctl reboot
+```
+
+See [../image/README.md](../image/README.md#updates).
+
+## Fresh installation directly from the image
+
+An installer USB stick with the image and a kickstart:
+[../image/README.md](../image/README.md#fresh-installation-from-a-usb-stick).
 
 ## Removal
 
-`sudo dnf remove vivobook-s15-support kernel-vivobook` (or `sudo make
-uninstall`), then reinstall the stock kernel
-(`sudo dnf reinstall kernel-core kernel-uki-dtbloader`) to get unmodified
-`/boot/vmlinuz-<version>` images.
+`sudo bootc switch quay.io/fedora/fedora-silverblue:45` (or
+`sudo rpm-ostree rebase fedora:fedora/45/aarch64/silverblue`) and reboot.
+Remove `plymouth.force-scale=2` and `systemd.tpm2_wait=0` with
+`sudo rpm-ostree kargs --delete-if-present=...` if you do not want them.

@@ -5,6 +5,7 @@
 # sudo make install    install hooks, overlays, UCM and rules (default PREFIX=/usr/local)
 # sudo make apply      apply the overlay to all installed kernels and the UCM profile
 # sudo make uninstall  remove what install added (does not restore /boot images)
+# sudo make image      build the Silverblue image (image/build.sh, see image/README.md)
 #
 # Packaging: make install PREFIX=/usr SYSCONFDIR=/etc DESTDIR=... \
 #   KERNELINSTALLDIR=/usr/lib/kernel/install.d UNITDIR=/usr/lib/systemd/system \
@@ -27,7 +28,8 @@ SUBST = sed -e 's|@LIBEXECDIR@|$(LIBEXECDIR)|g' -e 's|@DATADIR@|$(DATADIR)|g' -e
 
 DTBOS := overlay/build/vivobook-s15.dtbo overlay/build/vivobook-s15-experimental.dtbo
 SCRIPTS := hooks/apply-dtb hooks/apply-ucm hooks/lpass-rpm-on hooks/30-vivobook-s15.install \
-	overlay/build-overlay.sh overlay/update-include.sh tools/*.sh packaging/kernel/*.sh userspace/*/*.sh
+	overlay/build-overlay.sh overlay/update-include.sh tools/*.sh packaging/kernel/*.sh userspace/*/*.sh \
+	image/*.sh
 
 all: $(DTBOS)
 
@@ -73,7 +75,10 @@ uninstall:
 	rm -rf $(DESTDIR)$(DOCDIR)
 	@echo "kept $(SYSCONFDIR)/vivobook-s15.conf; /boot images keep the merged DTB until the next kernel install"
 
+image:
+	image/build.sh
+
 clean:
 	rm -rf overlay/build hooks/__pycache__
 
-.PHONY: all check install apply uninstall clean
+.PHONY: all check install apply uninstall image clean
