@@ -73,7 +73,15 @@ repo_gpgcheck=0
 enabled=1
 enabled_metadata=1
 R
-	dnf -y install howdy python3-numpy v4l-utils python3-pillow checkpolicy policycoreutils patch
+	# The COPR CDN sometimes drops downloads: more retries, and the whole
+	# transaction again (already downloaded packages stay in the cache).
+	local n
+	for n in 1 2 3; do
+		dnf -y --setopt=retries=10 install howdy python3-numpy v4l-utils python3-pillow \
+			checkpolicy policycoreutils patch && break
+		[ "$n" -lt 3 ] || exit 1
+		echo "dnf failed (attempt $n), retrying in 20 s"; sleep 20
+	done
 	# The image keeps the repository file but not the dnf cache.
 
 	# 2. camss reader + the 5-line reader selection in video_capture.py
