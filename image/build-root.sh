@@ -200,5 +200,5 @@ find /var/cache -mindepth 1 -maxdepth 1 ! -name libdnf5 -exec rm -rf {} +
 # /boot and /var/lib/rpm-state: left behind by the kernel RPM scriptlets
 # (ostree ignores /boot in an image; bootc lint warns about both).
 rm -rf /var/lib/dnf /var/lib/rpm-state /var/log/* /var/tmp/* /tmp/* /var/backups/x1e /run/dnf
-rm -rf /boot/*
+find /boot -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 echo "done: $KVER, EXPERIMENTAL_EC=$EXPERIMENTAL_EC, HOWDY=$WITH_HOWDY, WIFI=$WITH_WIFI"
