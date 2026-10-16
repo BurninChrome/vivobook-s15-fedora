@@ -73,6 +73,23 @@ fi
 [ "$(id -u)" -eq 0 ] || [ "$SWITCH" -eq 0 ] || { echo "--switch needs root: sudo $0 $*" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || echo "note: building as a user; bootc/rpm-ostree only see root's images (sudo)" >&2
 
+# bootc refuses to switch or upgrade a deployment with local rpm-ostree
+# changes (rpm-ostree install/override). Check before the build, not after it.
+if [ "$SWITCH" -eq 1 ] && command -v rpm-ostree >/dev/null; then
+	local_changes=$(rpm-ostree status --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)["deployments"][0]
+keys = ("requested-packages", "requested-local-packages", "base-removals", "base-local-replacements")
+print(" ".join(str(x) if isinstance(x, str) else str(x[0]) for k in keys for x in d.get(k) or []))' 2>/dev/null || true)
+	if [ -n "$local_changes" ]; then
+		echo "rpm-ostree changes on this system: $local_changes" >&2
+		echo "bootc cannot switch with them. Put the packages into image/local/packages," >&2
+		echo "run: rpm-ostree reset (or rpm-ostree cleanup -p if not rebooted yet), reboot," >&2
+		echo "then run this script again." >&2
+		exit 1
+	fi
+fi
+
 if ls "$ROOT"/image/local/rpms/kernel-core-*.rpm >/dev/null 2>&1; then
 	echo "kernel: $(basename "$(ls "$ROOT"/image/local/rpms/kernel-core-*.rpm | head -1)")"
 else
