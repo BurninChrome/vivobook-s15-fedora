@@ -101,7 +101,7 @@ fi
 
 # --- CPU frequency, GPU, video decoder ---
 pol=$(ls -d /sys/devices/system/cpu/cpufreq/policy* 2>/dev/null | wc -l)
-if [ "$pol" -ge 3 ]; then pass "cpufreq: $pol policies"; else fail "cpufreq: $pol policies (expected 3)"; fi
+if [ "$pol" -ge 3 ]; then pass "cpufreq: $pol policies"; else fail "cpufreq: $pol policies (expected 3; scmi-cpufreq not loaded? modules-load/)"; fi
 if ls /dev/dri/renderD* >/dev/null 2>&1; then pass "GPU render node"; else fail "no GPU render node"; fi
 if grep -qs 'iris' /sys/class/video4linux/*/name; then pass "video decoder (iris)"; else warn "iris video decoder not found"; fi
 

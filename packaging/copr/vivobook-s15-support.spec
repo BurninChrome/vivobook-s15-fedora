@@ -39,7 +39,8 @@ Vendor firmware is not included; see firmware.md in the documentation.
 %make_install PREFIX=%{_prefix} LIBEXECDIR=%{_libexecdir} DATADIR=%{_datadir} \
     DOCDIR=%{_pkgdocdir} SYSCONFDIR=%{_sysconfdir} \
     KERNELINSTALLDIR=%{_prefix}/lib/kernel/install.d UNITDIR=%{_unitdir} \
-    UDEVRULESDIR=%{_udevrulesdir} WPCONFDIR=%{_datadir}/wireplumber/wireplumber.conf.d
+    UDEVRULESDIR=%{_udevrulesdir} WPCONFDIR=%{_datadir}/wireplumber/wireplumber.conf.d \
+    MODULESLOADDIR=%{_modulesloaddir}
 install -m 0644 README.md CHANGELOG.md %{buildroot}%{_pkgdocdir}/
 
 %post
@@ -71,6 +72,7 @@ fi
 %{_unitdir}/vivobook-s15-ucm.path
 %{_unitdir}/vivobook-s15-ucm.service
 %{_udevrulesdir}/90-vivobook-s15-lpass-rpm.rules
+%{_modulesloaddir}/vivobook-s15-cpufreq.conf
 %{_datadir}/wireplumber/wireplumber.conf.d/50-qcom-camss-hide-v4l2.conf
 
 %changelog

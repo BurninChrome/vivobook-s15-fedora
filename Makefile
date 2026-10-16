@@ -9,7 +9,7 @@
 #
 # Packaging: make install PREFIX=/usr SYSCONFDIR=/etc DESTDIR=... \
 #   KERNELINSTALLDIR=/usr/lib/kernel/install.d UNITDIR=/usr/lib/systemd/system \
-#   UDEVRULESDIR=/usr/lib/udev/rules.d
+#   UDEVRULESDIR=/usr/lib/udev/rules.d MODULESLOADDIR=/usr/lib/modules-load.d
 
 PREFIX           ?= /usr/local
 LIBEXECDIR       ?= $(PREFIX)/libexec
@@ -20,6 +20,7 @@ KERNELINSTALLDIR ?= $(SYSCONFDIR)/kernel/install.d
 UNITDIR          ?= $(SYSCONFDIR)/systemd/system
 UDEVRULESDIR     ?= $(SYSCONFDIR)/udev/rules.d
 WPCONFDIR        ?= $(DATADIR)/wireplumber/wireplumber.conf.d
+MODULESLOADDIR   ?= $(SYSCONFDIR)/modules-load.d
 DESTDIR          ?=
 
 LIB  := $(DESTDIR)$(LIBEXECDIR)/vivobook-s15
@@ -43,7 +44,8 @@ check:
 
 install: all
 	install -d $(LIB) $(DATA)/ucm $(DESTDIR)$(KERNELINSTALLDIR) $(DESTDIR)$(UNITDIR) \
-		$(DESTDIR)$(UDEVRULESDIR) $(DESTDIR)$(WPCONFDIR) $(DESTDIR)$(SYSCONFDIR) $(DESTDIR)$(DOCDIR)
+		$(DESTDIR)$(UDEVRULESDIR) $(DESTDIR)$(WPCONFDIR) $(DESTDIR)$(SYSCONFDIR) $(DESTDIR)$(DOCDIR) \
+		$(DESTDIR)$(MODULESLOADDIR)
 	for f in apply-dtb apply-ucm lpass-rpm-on; do $(SUBST) hooks/$$f > $(LIB)/$$f; chmod 0755 $(LIB)/$$f; done
 	install -m 0755 hooks/patch-vmlinuz-dtb.py $(LIB)/
 	install -m 0644 $(DTBOS) $(DATA)/
@@ -54,6 +56,7 @@ install: all
 	$(SUBST) hooks/vivobook-s15-ucm.service > $(DESTDIR)$(UNITDIR)/vivobook-s15-ucm.service
 	$(SUBST) udev/90-vivobook-s15-lpass-rpm.rules > $(DESTDIR)$(UDEVRULESDIR)/90-vivobook-s15-lpass-rpm.rules
 	install -m 0644 userspace/camera/50-qcom-camss-hide-v4l2.conf $(DESTDIR)$(WPCONFDIR)/
+	install -m 0644 modules-load/vivobook-s15-cpufreq.conf $(DESTDIR)$(MODULESLOADDIR)/
 	[ -e $(DESTDIR)$(SYSCONFDIR)/vivobook-s15.conf ] || \
 		$(SUBST) hooks/vivobook-s15.conf > $(DESTDIR)$(SYSCONFDIR)/vivobook-s15.conf
 	install -m 0644 docs/firmware.md docs/ec-fan-control.md $(DESTDIR)$(DOCDIR)/
@@ -71,7 +74,8 @@ uninstall:
 	rm -f $(DESTDIR)$(KERNELINSTALLDIR)/30-vivobook-s15.install \
 		$(DESTDIR)$(UNITDIR)/vivobook-s15-ucm.path $(DESTDIR)$(UNITDIR)/vivobook-s15-ucm.service \
 		$(DESTDIR)$(UDEVRULESDIR)/90-vivobook-s15-lpass-rpm.rules \
-		$(DESTDIR)$(WPCONFDIR)/50-qcom-camss-hide-v4l2.conf
+		$(DESTDIR)$(WPCONFDIR)/50-qcom-camss-hide-v4l2.conf \
+		$(DESTDIR)$(MODULESLOADDIR)/vivobook-s15-cpufreq.conf
 	rm -rf $(DESTDIR)$(DOCDIR)
 	@echo "kept $(SYSCONFDIR)/vivobook-s15.conf; /boot images keep the merged DTB until the next kernel install"
 

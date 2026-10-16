@@ -18,7 +18,8 @@ WORKDIR /src
 RUN make clean && make install DESTDIR=/out PREFIX=/usr LIBEXECDIR=/usr/libexec DATADIR=/usr/share \
         DOCDIR=/usr/share/doc/vivobook-s15-support SYSCONFDIR=/etc \
         KERNELINSTALLDIR=/usr/lib/kernel/install.d UNITDIR=/usr/lib/systemd/system \
-        UDEVRULESDIR=/usr/lib/udev/rules.d WPCONFDIR=/usr/share/wireplumber/wireplumber.conf.d && \
+        UDEVRULESDIR=/usr/lib/udev/rules.d WPCONFDIR=/usr/share/wireplumber/wireplumber.conf.d \
+        MODULESLOADDIR=/usr/lib/modules-load.d && \
     # Not needed in an image: kernels and alsa-ucm only change when the image is
     # rebuilt, and image/build-root.sh applies both at that time.
     rm -f /out/usr/lib/kernel/install.d/30-vivobook-s15.install \

@@ -23,6 +23,8 @@ Releases are tagged `vYYYY.MM.N`. The kernel package is versioned separately
   the userspace scripts that change `/usr` refuse to run on a booted image.
 - `tools/selftest.sh` checks the booted image and its kernel arguments.
 - CI builds the image (stock kernel, no firmware).
+- `modules-load/vivobook-s15-cpufreq.conf`: loads `scmi-cpufreq`, which has
+  no modalias; without it the CPU cores never change frequency.
 - Suspend (s2idle) with the experimental EC driver: patch 0411 (the Tj feed
   always restarts on resume, retries for modern standby enter/exit) and
   `userspace/suspend` (`allow_suspend=1`, s2idle). Tested: 12 suspends up to

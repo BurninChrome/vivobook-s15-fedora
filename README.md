@@ -98,6 +98,7 @@ Updates: `git pull && sudo image/build.sh --switch`, then reboot.
 | [`overlay/`](overlay/) | device tree overlay, built from `fragments/NN-*.dtsi` (`fragments/experimental/` opt-in) |
 | [`image/`](image/) | Silverblue image: `Containerfile`, build and switch scripts, kernel arguments, kickstart |
 | [`hooks/`](hooks/) | `apply-dtb` (overlay into the DTB inside the UKI), UCM helper, kernel-install hook (Workstation), `/etc/vivobook-s15.conf` |
+| [`modules-load/`](modules-load/) | loads `scmi-cpufreq` (CPU frequency scaling) at boot |
 | [`udev/`](udev/) | LPASS runtime PM workaround for 7.3 kernels |
 | [`ucm/`](ucm/) | ALSA UCM profile (to be upstreamed to alsa-ucm-conf) |
 | [`kernel/`](kernel/) | patch series, kernel config fragment, upstream status of each patch |
