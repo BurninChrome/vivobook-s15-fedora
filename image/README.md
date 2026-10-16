@@ -21,7 +21,7 @@ own container storage or as a file on your own USB stick.
 | `build-kernel.sh` | builds `kernel-vivobook` in a Fedora container into `local/rpms` (hours) |
 | `kargs.d/10-vivobook-s15.toml` | kernel arguments applied by `bootc switch` / `bootc upgrade` |
 | `vivobook-s15.ks` | kickstart for a fresh installation from a USB stick (finds the OCI archive on the stick in `%pre`) |
-| `local/` | **git-ignored** inputs: `firmware/`, `logo/`, `rpms/` |
+| `local/` | **git-ignored** inputs: `firmware/`, `logo/`, `rpms/`, `packages` (extra RPMs) |
 
 ## Build options
 
@@ -32,7 +32,7 @@ own container storage or as a file on your own USB stick.
 | `--ec yes\|no` | value in the running `/etc/vivobook-s15.conf`, else `no` | EC node in the DTB (fan control) and `allow_suspend=1`; **read [../docs/ec-fan-control.md](../docs/ec-fan-control.md)** |
 | `--howdy yes\|no` | `yes` | Howdy from COPR starfish/howdy-beta, camss reader, SELinux module; PAM stays your choice |
 | `--wifi yes\|no` | `yes` | Wi-Fi power save off, ath12k stall watchdog timer |
-| `--packages "A B"` | | extra RPMs (prefer Flatpak or toolbox for applications) |
+| `--packages "A B"` | contents of `local/packages` | extra RPMs (prefer Flatpak or toolbox for applications); put them in `local/packages` so every rebuild keeps them |
 | `--switch` | | `bootc switch` to the image, or `bootc upgrade` if it is already booted |
 | `--oci-archive FILE` | | write the image to a file (installer USB stick) |
 | `--tag`, `--base` | `localhost/vivobook-s15-silverblue:45`, `quay.io/fedora/fedora-silverblue:45` | |

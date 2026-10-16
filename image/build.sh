@@ -16,7 +16,8 @@
 #   --ec yes|no        experimental EC fan control [value in /etc/vivobook-s15.conf, else no]
 #   --howdy yes|no     Howdy face login [yes]
 #   --wifi yes|no      Wi-Fi power save off + watchdog [yes]
-#   --packages "A B"   additional packages
+#   --packages "A B"   additional packages [image/local/packages, if present:
+#                      one or more per line, # comments; kept across rebuilds]
 #   --no-firmware      build without image/local/firmware (CI only)
 #   --no-pull          do not check for a newer base image
 #
@@ -31,6 +32,7 @@ EC=""
 HOWDY=yes
 WIFI=yes
 PACKAGES=""
+[ -f "$ROOT"/image/local/packages ] && PACKAGES=$(sed 's/#.*//' "$ROOT"/image/local/packages | xargs)
 NOFW=no
 PULL=--pull=newer
 SWITCH=0
@@ -77,6 +79,7 @@ else
 	echo "kernel: stock Fedora (no image/local/rpms; cameras, Fn keys and EC need kernel-vivobook)"
 fi
 [ "$EC" = yes ] && echo "EXPERIMENTAL_EC=yes: read docs/ec-fan-control.md"
+[ -z "$PACKAGES" ] || echo "extra packages: $PACKAGES"
 
 version=$(date +%Y%m%d.%H%M)-$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo local)
 # shellcheck disable=SC2086
@@ -98,9 +101,12 @@ if [ -n "$ARCHIVE" ]; then
 fi
 
 if [ "$SWITCH" -eq 1 ]; then
-	booted=$(bootc status --format json 2>/dev/null |
-		python3 -c 'import json,sys; s=json.load(sys.stdin)["status"]["booted"]["image"]["image"]; print(s["transport"]+":"+s["image"])' 2>/dev/null || true)
-	if [ "$booted" = "containers-storage:$TAG" ]; then
+	# spec.image: the image the system follows (booted or already staged by an
+	# earlier switch). Same image -> upgrade, which fetches the new build;
+	# "bootc switch" would only say "Image specification is unchanged".
+	current=$(bootc status --format json 2>/dev/null |
+		python3 -c 'import json,sys; s=json.load(sys.stdin)["spec"]["image"]; print(s["transport"]+":"+s["image"])' 2>/dev/null || true)
+	if [ "$current" = "containers-storage:$TAG" ]; then
 		bootc upgrade
 	else
 		bootc switch --transport containers-storage "$TAG"

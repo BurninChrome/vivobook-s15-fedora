@@ -187,5 +187,8 @@ chmod 0600 "/usr/lib/modules/$KVER/initramfs.img"
 # --- 13. clean up ---
 step "clean up"
 dnf clean all
-rm -rf /var/cache/* /var/lib/dnf /var/log/* /var/tmp/* /tmp/* /var/backups/x1e /run/dnf
+# /boot and /var/lib/rpm-state: left behind by the kernel RPM scriptlets
+# (ostree ignores /boot in an image; bootc lint warns about both).
+rm -rf /var/cache/* /var/lib/dnf /var/lib/rpm-state /var/log/* /var/tmp/* /tmp/* /var/backups/x1e /run/dnf
+rm -rf /boot/*
 echo "done: $KVER, EXPERIMENTAL_EC=$EXPERIMENTAL_EC, HOWDY=$WITH_HOWDY, WIFI=$WITH_WIFI"
