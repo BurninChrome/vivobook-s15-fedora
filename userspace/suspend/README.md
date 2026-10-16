@@ -1,5 +1,10 @@
 # Suspend (s2idle) with the EC driver
 
+> **Silverblue:** the image ships `50-vivobook-s15-s2idle.conf` in
+> `/usr/lib/systemd/sleep.conf.d/`, and with `image/build.sh --ec yes` also
+> `vivobook-s15-ec.conf` in `/usr/lib/modprobe.d/`. Nothing to install by
+> hand; a file of the same name in `/etc` overrides either.
+
 Only for systems that run the experimental EC driver (`EXPERIMENTAL_EC=yes`,
 kernel patches 0401-0411). Without the EC driver the EC is never armed and
 suspend needs nothing from this directory except the s2idle setting.

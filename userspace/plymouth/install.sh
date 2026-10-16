@@ -11,7 +11,12 @@
 #                         initramfs rebuild of the running kernel, with a check that no
 #                         firmware or module went missing (otherwise the old image is restored)
 #   --kver KVER           with --theme: rebuild this kernel's initramfs instead (repeatable)
+#   --image               with --theme: inside a Silverblue image build (no backups, no
+#                         initramfs rebuild: image/build-root.sh runs dracut at the end)
 #   --dry-run             print the commands only
+#
+# Silverblue: /usr is read-only, so the theme and the kernel parameter are part of
+# the image (image/README.md); this script refuses to run on a booted image.
 #
 # Why: when booting from DT there is no ACPI BGRT and no vendor logo, so the
 # stock themes put the spinner at 70% height under a missing logo.
@@ -27,7 +32,7 @@ WM_SRC=/usr/share/plymouth/themes/spinner/watermark.png
 MARK_BEGIN="# >>> vivobook-s15-fedora plymouth"
 MARK_END="# <<< vivobook-s15-fedora plymouth"
 BK=/var/lib/vivobook-plymouth/backup-$(date +%Y%m%d-%H%M%S)
-DO_SCALE=0 DO_THEME=0 DRY=0
+DO_SCALE=0 DO_THEME=0 DRY=0 IMAGE=0
 KVERS=()
 
 while [ $# -gt 0 ]; do
@@ -36,14 +41,20 @@ while [ $# -gt 0 ]; do
 		--theme) DO_THEME=1; shift ;;
 		--kver) KVERS+=("${2:?}"); shift 2 ;;
 		--dry-run) DRY=1; shift ;;
+		--image) IMAGE=1; shift ;;
 		*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
 done
-[ $DO_SCALE -eq 1 ] || [ $DO_THEME -eq 1 ] || { sed -n '4,17p' "$0"; exit 2; }
+[ $DO_SCALE -eq 1 ] || [ $DO_THEME -eq 1 ] || { sed -n '4,22p' "$0"; exit 2; }
+if [ -e /run/ostree-booted ]; then
+	echo "Silverblue: the theme and plymouth.force-scale=2 are part of the image (image/README.md)" >&2
+	exit 1
+fi
+[ $IMAGE -eq 0 ] || [ $DO_SCALE -eq 0 ] || { echo "--scale: in an image the parameter comes from image/kargs.d" >&2; exit 2; }
 [ $DRY -eq 1 ] || [ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
 
 run() { if [ $DRY -eq 1 ]; then echo "+ $*"; else "$@"; fi; }
-backup() { [ $DRY -eq 1 ] && return 0; mkdir -p "$BK$(dirname "$1")"; [ -e "$1" ] && cp -a "$1" "$BK$1"; return 0; }
+backup() { [ $DRY -eq 1 ] || [ $IMAGE -eq 1 ] && return 0; mkdir -p "$BK$(dirname "$1")"; [ -e "$1" ] && cp -a "$1" "$BK$1"; return 0; }
 
 # List of firmware files and modules inside an initramfs image.
 fw_mod_list() {
@@ -112,8 +123,10 @@ if [ $DO_THEME -eq 1 ]; then
 		if [ $DRY -eq 1 ]; then echo "+ append [Daemon] Theme=$THEME to $CONF"
 		else printf '%s\n[Daemon]\nTheme=%s\n%s\n' "$MARK_BEGIN" "$THEME" "$MARK_END" >> "$CONF"; fi
 	fi
-	[ ${#KVERS[@]} -gt 0 ] || KVERS=("$(uname -r)")
-	for k in "${KVERS[@]}"; do rebuild_initramfs "$k" || rc=1; done
+	if [ $IMAGE -eq 0 ]; then
+		[ ${#KVERS[@]} -gt 0 ] || KVERS=("$(uname -r)")
+		for k in "${KVERS[@]}"; do rebuild_initramfs "$k" || rc=1; done
+	fi
 fi
-[ $DRY -eq 1 ] || echo "backups: $BK"
+[ $DRY -eq 1 ] || [ $IMAGE -eq 1 ] || echo "backups: $BK"
 exit $rc

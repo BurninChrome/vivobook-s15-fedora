@@ -1,7 +1,7 @@
 # Fedora on the ASUS Vivobook S 15 (S5507QAD, Snapdragon X Elite)
 
-Device tree additions, kernel patches, packaging and tools that make
-**Fedora 45 aarch64** usable as a daily system on the
+Device tree additions, kernel patches, a bootable container image and tools
+that make **Fedora Silverblue 45 aarch64** usable as a daily system on the
 **ASUS Vivobook S 15 S5507QAD** (Snapdragon X Elite X1E-78-100, "Hamoa", `x1e80100`).
 
 > **Unofficial community project.** Not affiliated with or endorsed by ASUS,
@@ -12,8 +12,10 @@ Device tree additions, kernel patches, packaging and tools that make
 
 ## Status
 
-Tested on S5507QAD, BIOS `S5507QAD.367`, Fedora 45, kernel `7.3.0` with the
-patches from [`kernel/patches/`](kernel/patches/).
+Tested on S5507QAD, BIOS `S5507QAD.367`, Fedora Silverblue 45 (image built
+with [`image/`](image/)), kernel `7.3.0` with the patches from
+[`kernel/patches/`](kernel/patches/). The same pieces also work on a mutable
+Fedora Workstation 45 ([docs/install-workstation.md](docs/install-workstation.md)).
 
 | Feature | State | Needs | Notes |
 |---|---|---|---|
@@ -53,54 +55,58 @@ Please report your model and BIOS version with the
   module by hand. Details: [docs/ec-fan-control.md](docs/ec-fan-control.md).
 - **Device tree inside the kernel image.** Fedora boots this laptop through a
   UKI with `.dtbauto` sections (stubble). GRUB's `devicetree` command is ignored.
-  The kernel-install hook in [`hooks/`](hooks/) merges the overlay into the DTB
-  and writes it back into `/boot/vmlinuz-<version>`. Keep a stock kernel entry
-  in GRUB as a fallback.
+  The image build merges the overlay into the DTB inside
+  `/usr/lib/modules/<version>/vmlinuz` ([docs/dtb-delivery.md](docs/dtb-delivery.md)).
+  The previous deployment stays in GRUB as a fallback (`bootc rollback`).
 - **Firmware is not included.** ASUS/Qualcomm firmware may not be
-  redistributed. Use [`tools/fetch-firmware.sh`](tools/fetch-firmware.sh)
-  (downloads the official ASUS package) or `qcom-firmware-extract` (copies it
-  from a Windows partition).
+  redistributed. [`image/fetch-local.sh`](image/fetch-local.sh) downloads the
+  official ASUS package and extracts it locally; the image built from it is for
+  your laptop only and must not be pushed to a public registry.
 - **Secure Boot** must be disabled for the custom kernel (it is not signed).
 - Keep a Fedora live USB at hand.
 
 ## Installation
 
-Short version (details in [docs/install.md](docs/install.md)):
+Short version, starting from a stock Fedora Silverblue 45 aarch64 installation
+(details in [docs/install.md](docs/install.md), image internals in
+[image/README.md](image/README.md)):
 
 ```bash
-# 1. Firmware (no root needed for this step)
-tools/fetch-firmware.sh
-sudo install -D -m 0644 -t /usr/lib/firmware/updates/qcom/x1e80100/ASUSTeK/vivobook-s15/ firmware-out/*
+git clone https://github.com/BurninChrome/vivobook-s15-fedora && cd vivobook-s15-fedora
 
-# 2. Support package: overlay, kernel-install hook, UCM, udev and WirePlumber rules
-sudo dnf copr enable BurninChrome/vivobook-s15       # planned
-sudo dnf install vivobook-s15-support
-#    or from this repository: make && sudo make install && sudo make apply
+# 1. Firmware and boot logo into image/local/ (no root, runs in a Fedora container)
+image/fetch-local.sh
 
-# 3. Kernel with the patches from kernel/patches/
-sudo dnf install kernel-vivobook                # planned, same COPR
+# 2. Kernel with the patches from kernel/patches/ (no root, several hours;
+#    later: the RPMs from COPR, planned)
+image/build-kernel.sh
 
-# 4. Reboot, then run the self-test
+# 3. Build the image and switch to it
+sudo image/build.sh --switch
+systemctl reboot
+
+# 4. Self-test
 tools/selftest.sh
 ```
 
-Until the COPR exists, [docs/install.md](docs/install.md) explains the manual
-installation from this repository.
+Updates: `git pull && sudo image/build.sh --switch`, then reboot.
 
 ## Repository layout
 
 | Path | Content |
 |---|---|
 | [`overlay/`](overlay/) | device tree overlay, built from `fragments/NN-*.dtsi` (`fragments/experimental/` opt-in) |
-| [`hooks/`](hooks/) | kernel-install hook that applies the overlay to the DTB inside the UKI, UCM helper, `/etc/vivobook-s15.conf` |
+| [`image/`](image/) | Silverblue image: `Containerfile`, build and switch scripts, kernel arguments, kickstart |
+| [`hooks/`](hooks/) | `apply-dtb` (overlay into the DTB inside the UKI), UCM helper, kernel-install hook (Workstation), `/etc/vivobook-s15.conf` |
+| [`modules-load/`](modules-load/) | loads `scmi-cpufreq` (CPU frequency scaling) at boot |
 | [`udev/`](udev/) | LPASS runtime PM workaround for 7.3 kernels |
 | [`ucm/`](ucm/) | ALSA UCM profile (to be upstreamed to alsa-ucm-conf) |
 | [`kernel/`](kernel/) | patch series, kernel config fragment, upstream status of each patch |
 | [`userspace/`](userspace/) | camera, Howdy, keyboard, Wi-Fi watchdog, Plymouth theme, boot time tweaks |
-| [`packaging/`](packaging/) | RPM spec files for COPR |
+| [`packaging/`](packaging/) | RPM spec files for COPR (kernel RPMs also feed the image) |
 | [`tools/`](tools/) | firmware download, self-test, hardware report, privacy scan, identity setup |
-| `Makefile`, `identity.conf` | build/install without packages; the one place for owner and author names |
-| [`docs/`](docs/) | installation, firmware, DTB delivery, EC, upstream status, troubleshooting |
+| `Makefile`, `identity.conf` | build/install without packages (also used by the image build); the one place for owner and author names |
+| [`docs/`](docs/) | installation (Silverblue, Workstation), firmware, DTB delivery, EC, upstream status, troubleshooting |
 
 ## Known issues
 

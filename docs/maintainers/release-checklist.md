@@ -32,6 +32,8 @@ every release.
       drivers or AeoB resource files.
 - [ ] No ASUS logo or other trademarks as files (the Plymouth theme reads the
       logo from the firmware at install time).
+- [ ] Nothing from `image/local/` committed, no `*.oci.tar`, and no
+      vivobook-s15 image pushed to any registry (it contains the firmware).
 - [ ] Every third-party file keeps its license header and is listed in
       `docs/credits.md`.
 - [ ] Every kernel patch has its original `From:`, the full `Signed-off-by:`
@@ -44,7 +46,9 @@ every release.
 - [ ] Tag `vYYYY.MM.N` (signed tag if possible), push the tag.
 - [ ] COPR builds started by the tag succeeded for `fedora-45-aarch64` (and
       `fedora-rawhide-aarch64`).
-- [ ] Installed on the test laptop from COPR, `tools/selftest.sh` passed,
+- [ ] Image built with `image/build.sh --switch` on the test laptop, booted,
+      `tools/selftest.sh` passed; rollback to the previous image works.
+- [ ] Installed on a Workstation test system from COPR, `tools/selftest.sh` passed,
       battery, audio, cameras and fans checked after a reboot.
 - [ ] GitHub release created with the changelog section (no binaries needed,
       COPR ships the RPMs).

@@ -12,6 +12,11 @@ PARAM=plymouth.force-scale=2
 KVER=$(uname -r)
 [ "${1:-}" = --kver ] && KVER=${2:?}
 [ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
+if [ -e /run/ostree-booted ]; then
+	echo "Silverblue: build the image without the logo (image/local/logo) and drop" >&2
+	echo "plymouth.force-scale=2 from image/kargs.d, see image/README.md" >&2
+	exit 1
+fi
 
 grubby --update-kernel=ALL --remove-args="$PARAM"
 [ -f /etc/kernel/cmdline ] && sed -i -E "s/[[:space:]]*$PARAM//" /etc/kernel/cmdline

@@ -1,5 +1,12 @@
 # Wi-Fi (WCN7850, ath12k)
 
+> **Silverblue:** steps A and B are part of the image (`image/build.sh
+> --wifi yes`, the default): `/usr/lib/NetworkManager/conf.d/90-vivobook-wifi-powersave.conf`,
+> `/usr/libexec/vivobook-wifi-{watchdog,recover}` and the enabled
+> `vivobook-wifi-watchdog.timer`. Step C (`install.sh --band-24`) works as
+> below; `uninstall.sh` does not remove the built-in parts (rebuild with
+> `--wifi no`).
+
 On 7.3 kernels the card occasionally stalls: it associates with the access
 point but the 4-way handshake never completes, followed by beacon loss, in a
 loop until the driver is reloaded. Contributing factors seen in the logs:

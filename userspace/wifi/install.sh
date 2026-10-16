@@ -41,6 +41,11 @@ if [ $DRY -eq 1 ]; then
 	exit 0
 fi
 [ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
+if [ -e /run/ostree-booted ] && [ -e /usr/lib/systemd/system/vivobook-wifi-watchdog.timer ]; then
+	echo "Silverblue: A and B are already part of the image (WITH_WIFI=yes)."
+	[ -n "$BAND_CONN" ] || exit 0
+	DO_WD=0 SKIP_A=1
+fi
 mkdir -p "$BK"
 echo "backup: $BK"
 
@@ -48,8 +53,9 @@ wl=""
 for d in /sys/class/net/*; do [ -d "$d/wireless" ] && wl=$(basename "$d") && break; done
 
 # --- A: power save off ---
-[ -e "$NMCONF" ] && cp -a "$NMCONF" "$BK/"
-cat > "$NMCONF" <<'CONF'
+if [ "${SKIP_A:-0}" -eq 0 ]; then
+	[ -e "$NMCONF" ] && cp -a "$NMCONF" "$BK/"
+	cat > "$NMCONF" <<'CONF'
 # vivobook-s15-fedora: Wi-Fi power save off for WCN7850 (ath12k).
 # Reason: data path stalls on 7.3 kernels with power save enabled.
 # Undo: delete this file.
@@ -57,12 +63,13 @@ cat > "$NMCONF" <<'CONF'
 match-device=type:wifi
 wifi.powersave=2
 CONF
-chmod 0644 "$NMCONF"
-restorecon "$NMCONF" 2>/dev/null || true
-/usr/bin/nmcli general reload conf
-if [ -n "$wl" ]; then
-	/usr/sbin/iw dev "$wl" set power_save off
-	echo "A: $wl: $(/usr/sbin/iw dev "$wl" get power_save)"
+	chmod 0644 "$NMCONF"
+	restorecon "$NMCONF" 2>/dev/null || true
+	/usr/bin/nmcli general reload conf
+	if [ -n "$wl" ]; then
+		/usr/sbin/iw dev "$wl" set power_save off
+		echo "A: $wl: $(/usr/sbin/iw dev "$wl" get power_save)"
+	fi
 fi
 
 # --- B: watchdog ---

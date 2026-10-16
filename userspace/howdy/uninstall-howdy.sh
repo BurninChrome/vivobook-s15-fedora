@@ -46,6 +46,11 @@ else
 fi
 cmp -s /etc/pam.d/sudo "$STATE/orig/etc/pam.d/sudo" 2>/dev/null && echo "sudo: identical to the original backup"
 [ "$PURGE" = 1 ] || { echo "DONE (PAM). Full removal: $0 --purge"; exit 0; }
+if [ -e /run/ostree-booted ]; then
+	echo "Silverblue: Howdy itself is part of the image; build it with WITH_HOWDY=no"
+	echo "(image/README.md). Face models stay in /etc/howdy/models until you delete them."
+	exit 0
+fi
 
 # 2. face models: keep a copy
 if ls /etc/howdy/models/*.dat >/dev/null 2>&1; then

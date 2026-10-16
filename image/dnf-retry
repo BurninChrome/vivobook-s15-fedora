@@ -1,0 +1,14 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# dnf for the image build (image/build-root.sh puts it first in PATH as "dnf",
+# so install-howdy.sh uses it too). A stalled mirror connection once kept dnf
+# waiting for an hour (minrate did not trigger): each attempt gets at most
+# 20 minutes, up to 3 attempts. Packages already downloaded stay in the cache.
+for n in 1 2 3; do
+	timeout --kill-after=30 1200 /usr/bin/dnf "$@" && exit 0
+	rc=$?
+	[ "$n" -lt 3 ] || exit "$rc"
+	echo "dnf $1: exit $rc (124 = timeout), attempt $n of 3, retrying in 20 s" >&2
+	sleep 20
+done

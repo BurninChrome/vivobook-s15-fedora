@@ -7,7 +7,7 @@ left in the `.dtbauto` section (206336 bytes on Fedora 45).
 | Output | Fragments | Used when |
 |---|---|---|
 | `build/vivobook-s15.dtbo` | `fragments/NN-*.dtsi` | default |
-| `build/vivobook-s15-experimental.dtbo` | the same plus `fragments/experimental/NN-*.dtsi` | `EXPERIMENTAL_EC=yes` in `/etc/vivobook-s15.conf` |
+| `build/vivobook-s15-experimental.dtbo` | the same plus `fragments/experimental/NN-*.dtsi` | `EXPERIMENTAL_EC=yes` (`image/build.sh --ec yes`, or `/etc/vivobook-s15.conf` on Workstation) |
 
 | Fragment | Content | Requires |
 |---|---|---|

@@ -13,7 +13,7 @@ jobs:
       - name: Install tools
         run: dnf -y install dtc ShellCheck git-core xz reuse
       - name: ShellCheck
-        run: shellcheck -S warning tools/*.sh hooks/apply-dtb hooks/apply-ucm hooks/lpass-rpm-on hooks/30-vivobook-s15.install overlay/*.sh packaging/kernel/*.sh userspace/*/*.sh
+        run: shellcheck -S warning tools/*.sh hooks/apply-dtb hooks/apply-ucm hooks/lpass-rpm-on hooks/30-vivobook-s15.install overlay/*.sh packaging/kernel/*.sh userspace/*/*.sh image/*.sh image/dnf-retry
       - name: REUSE compliance
         run: reuse lint
       - name: Privacy scan (fails on any hit outside the allow list)
@@ -30,6 +30,27 @@ jobs:
         run: |
           STOCK=$(ls /usr/lib/modules/*/dtb/qcom/x1e80100-asus-vivobook-s15.dtb | head -1)
           STOCK_DTB="$STOCK" make check
+
+  # Builds the Silverblue image with the stock kernel and WITHOUT firmware or
+  # logo (none of them may be redistributed). Checks the Containerfile, the
+  # UKI/DTB merge, Howdy, initramfs and bootc lint. The image is not pushed.
+  image:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      - name: Free disk space
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
+      - name: Build
+        run: |
+          sudo image/build.sh --no-firmware --ec yes --tag localhost/vivobook-s15-silverblue:ci
+      - name: Inspect
+        run: |
+          sudo podman run --rm localhost/vivobook-s15-silverblue:ci sh -c '
+            k=$(ls /usr/lib/modules); echo "kernel $k"
+            test -s /usr/lib/modules/$k/devicetree
+            python3 /usr/libexec/vivobook-s15/patch-vmlinuz-dtb.py --verify --vmlinuz /usr/lib/modules/$k/vmlinuz
+            grep -q ASUS-Vivobook-S15.conf /usr/share/alsa/ucm2/Qualcomm/x1e80100/x1e80100.conf
+            cat /usr/lib/bootc/kargs.d/10-vivobook-s15.toml'
 
   patches:
     runs-on: ubuntu-24.04-arm

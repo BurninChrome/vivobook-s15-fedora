@@ -39,3 +39,6 @@ userspace/plymouth/logo/
 # Downloaded ASUS package and extracted files
 SOCPackage_*.exe
 build-bpf/
+# Silverblue image inputs: firmware, logo, kernel RPMs, OCI archives
+image/local/
+*.oci.tar

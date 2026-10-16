@@ -1,0 +1,9 @@
+# Build context of image/Containerfile (the repository root).
+# image/local/ must stay in the context: firmware, logo and kernel RPMs.
+.git
+overlay/build
+packaging/kernel/out
+SOCPackage_*.exe
+firmware-out
+build-bpf
+**/__pycache__

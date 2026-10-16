@@ -19,6 +19,17 @@ repository does not ship them.
 Install location: `/usr/lib/firmware/updates/qcom/x1e80100/ASUSTeK/vivobook-s15/`
 (the `updates/` directory is searched first and is never touched by packages).
 
+## Silverblue
+
+`/usr` is read-only, so the files become part of the locally built image:
+`image/fetch-local.sh` runs Option A in a Fedora container and stores the
+files in `image/local/firmware/`, from where the image build copies them to
+the path above. For Option B, copy the six files there yourself (for example
+from a `toolbox` with `qcom-firmware-extract`). The image then contains
+vendor firmware: do not push it to a public registry or share the OCI archive.
+
+The commands below are for Fedora Workstation.
+
 ## Option A: official ASUS package (no Windows needed)
 
 ```bash

@@ -1,5 +1,10 @@
 # Plymouth boot splash
 
+> **Silverblue:** `image/fetch-local.sh` extracts the logo into
+> `image/local/logo/`, and the image build installs the theme and rebuilds the
+> initramfs; `plymouth.force-scale=2` comes from `image/kargs.d/`. The scripts
+> below are for Fedora Workstation.
+
 Two problems on this laptop with Fedora's default themes:
 
 1. **Tiny spinner and password dialog.** The LUKS prompt and the shutdown

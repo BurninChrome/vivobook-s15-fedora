@@ -1,5 +1,11 @@
 # Face login with Howdy and the IR camera
 
+> **Silverblue:** the image contains Howdy, the camss reader, the udev rule,
+> `config.ini` and the SELinux module (`image/build.sh --howdy yes`, the
+> default). Only the per-machine steps remain: `install-howdy.sh add USER`,
+> `test-cam USER` and `pam` (they write to `/etc`, which is kept across image
+> updates, and need no reinstall after a Howdy update in the image).
+
 Optional. Needs the kernel patches 0200-0202 (HM1092 driver with IR LED
 strobe) and the overlay fragments `20-camera-rgb` and `30-camera-ir`.
 

@@ -23,6 +23,30 @@ The section is 206336 bytes on Fedora 45 kernels. The merged DTB must fit;
 `overlay/build-overlay.sh` prints the remaining margin. With the 7.3 stock DTB
 the merged result is about 175 kB (margin about 31 kB).
 
+## Silverblue (ostree, bootc)
+
+On Silverblue the boot loader entry points at a copy of
+`/usr/lib/modules/<kver>/vmlinuz` in `/boot/ostree/`, and kernel-install
+plugins do not run on the booted system. The image build
+([`image/build-root.sh`](../image/build-root.sh)) therefore:
+
+1. takes `/usr/lib/modules/<kver>/vmlinuz-dtbloader.efi` (the stubble UKI)
+   out of the `kernel-uki-dtbloader` RPM and copies it over
+   `/usr/lib/modules/<kver>/vmlinuz`; the plain `vmlinuz` of `kernel-core`
+   has no `.dtbauto` sections. The package itself is not installed: it
+   conflicts with `kernel-core`, which provides the rest of the kernel,
+2. runs `apply-dtb <kver>`, which finds no `/boot/vmlinuz-<kver>` and patches
+   `/usr/lib/modules/<kver>/vmlinuz` instead (without a backup: the stock
+   kernel stays in the base image),
+3. also writes the merged DTB to `/usr/lib/modules/<kver>/devicetree`, which
+   ostree copies next to the kernel and names in the boot entry; stubble
+   uses its own section, the copy only keeps both identical.
+
+`EXPERIMENTAL_EC` is therefore a build option (`image/build.sh --ec yes|no`),
+and changing it means building and booting a new image.
+
+## Backups (Workstation)
+
 Before the first change of an image, `patch-vmlinuz-dtb.py` keeps a copy in
 `/var/backups/x1e/`; `patch-vmlinuz-dtb.py --restore --vmlinuz <image>`
 puts the stock image back.

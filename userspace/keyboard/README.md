@@ -1,5 +1,10 @@
 # Keyboard: Fn keys, backlight, Fn-lock
 
+> **Silverblue:** the image normally has the kernel driver (kernel-vivobook).
+> For the HID-BPF alternative build the image with
+> `image/build.sh --packages udev-hid-bpf`, run `build-bpf.sh` in a `toolbox`,
+> and install as below: `/usr/local` and `/etc` are writable.
+
 The keyboard of the S5507 is an I2C HID device (0B05:4543) that also carries
 vendor report 0x5A to and from the embedded controller: Fn hotkeys, keyboard
 backlight (3 levels) and Fn-lock.
