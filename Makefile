@@ -30,7 +30,7 @@ SUBST = sed -e 's|@LIBEXECDIR@|$(LIBEXECDIR)|g' -e 's|@DATADIR@|$(DATADIR)|g' -e
 DTBOS := overlay/build/vivobook-s15.dtbo overlay/build/vivobook-s15-experimental.dtbo
 SCRIPTS := hooks/apply-dtb hooks/apply-ucm hooks/lpass-rpm-on hooks/30-vivobook-s15.install \
 	overlay/build-overlay.sh overlay/update-include.sh tools/*.sh packaging/kernel/*.sh userspace/*/*.sh \
-	image/*.sh
+	image/*.sh image/dnf-retry
 
 all: $(DTBOS)
 

@@ -13,7 +13,7 @@ jobs:
       - name: Install tools
         run: dnf -y install dtc ShellCheck git-core xz reuse
       - name: ShellCheck
-        run: shellcheck -S warning tools/*.sh hooks/apply-dtb hooks/apply-ucm hooks/lpass-rpm-on hooks/30-vivobook-s15.install overlay/*.sh packaging/kernel/*.sh userspace/*/*.sh image/*.sh
+        run: shellcheck -S warning tools/*.sh hooks/apply-dtb hooks/apply-ucm hooks/lpass-rpm-on hooks/30-vivobook-s15.install overlay/*.sh packaging/kernel/*.sh userspace/*/*.sh image/*.sh image/dnf-retry
       - name: REUSE compliance
         run: reuse lint
       - name: Privacy scan (fails on any hit outside the allow list)

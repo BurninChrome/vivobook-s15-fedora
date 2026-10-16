@@ -27,6 +27,13 @@ KPKGS=(kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extr
 
 step() { printf '\n=== vivobook-s15: %s\n' "$*"; }
 
+# dnf for this build: keep downloaded packages in the cache mount
+# (image/Containerfile) and never wait forever on a stalled mirror.
+mkdir -p /etc/dnf/libdnf5.conf.d /run/vivobook-bin
+printf '[main]\nkeepcache=1\nretries=10\n' > /etc/dnf/libdnf5.conf.d/90-vivobook-build.conf
+install -m 0755 "$SRC"/image/dnf-retry /run/vivobook-bin/dnf
+export PATH=/run/vivobook-bin:$PATH
+
 # --- 1. kernel ---
 shopt -s nullglob
 rpms=()
@@ -186,9 +193,12 @@ chmod 0600 "/usr/lib/modules/$KVER/initramfs.img"
 
 # --- 13. clean up ---
 step "clean up"
-dnf clean all
+rm -f /etc/dnf/libdnf5.conf.d/90-vivobook-build.conf
+rm -rf /run/vivobook-bin
+# /var/cache/libdnf5 is the cache mount: keep it, it is not part of the image.
+find /var/cache -mindepth 1 -maxdepth 1 ! -name libdnf5 -exec rm -rf {} +
 # /boot and /var/lib/rpm-state: left behind by the kernel RPM scriptlets
 # (ostree ignores /boot in an image; bootc lint warns about both).
-rm -rf /var/cache/* /var/lib/dnf /var/lib/rpm-state /var/log/* /var/tmp/* /tmp/* /var/backups/x1e /run/dnf
+rm -rf /var/lib/dnf /var/lib/rpm-state /var/log/* /var/tmp/* /tmp/* /var/backups/x1e /run/dnf
 rm -rf /boot/*
 echo "done: $KVER, EXPERIMENTAL_EC=$EXPERIMENTAL_EC, HOWDY=$WITH_HOWDY, WIFI=$WITH_WIFI"

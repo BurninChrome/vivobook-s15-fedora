@@ -36,7 +36,10 @@ ARG ALLOW_NO_FIRMWARE=no
 ARG IMAGE_VERSION=""
 
 COPY --from=support /out/ /
+# The dnf cache survives between builds (cache mount, not part of the image),
+# so a rebuild does not download the same packages again.
 RUN --mount=type=bind,source=.,target=/run/vivobook-src,ro \
+    --mount=type=cache,target=/var/cache/libdnf5,sharing=locked \
     EXPERIMENTAL_EC="$EXPERIMENTAL_EC" WITH_HOWDY="$WITH_HOWDY" WITH_WIFI="$WITH_WIFI" \
     EXTRA_PACKAGES="$EXTRA_PACKAGES" ALLOW_NO_FIRMWARE="$ALLOW_NO_FIRMWARE" \
     bash /run/vivobook-src/image/build-root.sh /run/vivobook-src
